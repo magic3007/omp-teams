@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export function teamsHome(): string {
 	return process.env.OMP_TEAMS_HOME ?? join(homedir(), ".omp", "teams");
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS agents (
 	last_seen     INTEGER NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS agents_seat_alive ON agents(seat) WHERE status = 'alive';
+CREATE UNIQUE INDEX IF NOT EXISTS agents_seat_alive ON agents(seat) WHERE status IN ('alive','parked');
 CREATE INDEX IF NOT EXISTS agents_session ON agents(session_id);
 CREATE INDEX IF NOT EXISTS agents_parent ON agents(parent_seat);
 
@@ -178,6 +178,12 @@ const MIGRATION_V8 = `
 ALTER TABLE tasks ADD COLUMN paths TEXT;
 `;
 
+const MIGRATION_V9 = `
+DROP INDEX IF EXISTS agents_seat_alive;
+CREATE UNIQUE INDEX agents_seat_alive ON agents(seat) WHERE status IN ('alive','parked');
+ALTER TABLE groups DROP COLUMN drained_at;
+`;
+
 export function openDb(home = teamsHome()): Database {
 	mkdirSync(home, { recursive: true });
 	const db = new Database(join(home, "teams.db"), { create: true });
@@ -201,6 +207,7 @@ function migrate(db: Database): void {
 		if (current < 6) db.exec(MIGRATION_V6);
 		if (current < 7) db.exec(MIGRATION_V7);
 		if (current < 8) db.exec(MIGRATION_V8);
+		if (current < 9) db.exec(MIGRATION_V9);
 		db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 	})();
 }

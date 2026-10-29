@@ -1,5 +1,5 @@
 import type { SymbolKey } from "@oh-my-pi/pi-tui/theme/symbols";
-import { displayName, RANK_GLYPH } from "./identity";
+import { displayName, PARKED_GLYPH, RANK_GLYPH } from "./identity";
 import type { AgentRow } from "./registry";
 
 export { displayName };
@@ -13,6 +13,7 @@ export interface TeamCounts {
 	done: number;
 	blocked: number;
 	unread: number;
+	parked: number;
 }
 
 export interface PresenceInput {
@@ -113,6 +114,7 @@ export function statusSegments(input: PresenceInput): Segment[] {
 	}
 
 	if (counts.blocked > 0) segments.push({ icon: "status.warning", text: `${counts.blocked} blocked`, tone: "warning", bold: true });
+	if (counts.parked > 0) segments.push({ glyph: PARKED_GLYPH, text: `${counts.parked} parked`, tone: "dim" });
 	if (input.halted) segments.push({ icon: "icon.pause", text: "halted", tone: "error", bold: true });
 	if (input.budgetSpent) segments.push({ icon: "status.warning", text: "budget spent", tone: "error", bold: true });
 	if (input.paused) segments.push({ icon: "icon.pause", text: "paused", tone: "warning" });
@@ -187,7 +189,9 @@ export function widgetLines(entries: WidgetEntry[], now: number, painter: Painte
 		const name = painter.paint("accent", displayName(entry.agent.label).padEnd(width), true);
 		const report = entry.lastReport;
 		let state: string;
-		if (report?.status === "blocked" || report?.status === "failed") {
+		if (entry.agent.status === "parked") {
+			state = painter.paint("dim", `${PARKED_GLYPH} parked`);
+		} else if (report?.status === "blocked" || report?.status === "failed") {
 			state = painter.paint("warning", `${painter.icon("status.warning")} ${report.status}: ${truncate(report.summary, 56)}`);
 		} else if (entry.current) {
 			state = painter.paint("accent", `${painter.icon("status.running")} ${entry.current.id} ${truncate(entry.current.title, 52)}`);

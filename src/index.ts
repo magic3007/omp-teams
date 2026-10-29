@@ -1,11 +1,11 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { registerTeamsCommands } from "./commands";
 import { logEvent, openDb, teamsHome } from "./db";
 import { currentPaneId, Herdr, herdrAvailable } from "./herdr";
 import type { TeamsHost } from "./host";
-import { resolveProject } from "./identity";
+import { PARKED_GLYPH, resolveProject } from "./identity";
 import { decideDelivery, type MailRow, mailBody, persistedMsgIds, renderMail } from "./mail";
 import {
 	isManagerRole,
@@ -21,7 +21,7 @@ import { type Painter, paneStateLabels, paneTitle, statusLine, type Tone, widget
 import { systemPromptFor, taskPreface } from "./prompt";
 import type { AgentRow } from "./registry";
 import { TeamsRuntime } from "./runtime";
-import { decodeJoin, type SpawnDeps } from "./spawn";
+import { decodeJoin, type SpawnDeps, writeLaunchFile } from "./spawn";
 import { registerTeamsTools, TEAMS_TOOLS } from "./tools";
 
 const MAIL_CUSTOM_TYPE = "teams-mail";
@@ -67,6 +67,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 	let lastMetadataAt = 0;
 	let lastPatrolAt = 0;
 	let metadataSeq = 0;
+	let idleSince = 0;
 
 	const host: TeamsHost = {
 		runtime,
@@ -197,6 +198,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		try {
 			const rows = runtime.takeInbox(me);
 			if (rows.length === 0) return;
+			idleSince = 0;
 			const labelOf = (agentId: string, seat: string): string => runtime.registry.byId(agentId)?.label ?? seat;
 			const idle = ctx.isIdle();
 			let claimedTurn = false;
@@ -272,12 +274,63 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		if (now - lastPatrolAt < config.patrol_minutes * 60_000) return;
 		lastPatrolAt = now;
 		runtime.patrol(me);
+		if (me.role !== "personal") return;
+		for (const row of runtime.registry.allHolders()) {
+			if (row.status !== "parked") continue;
+			runtime.patrol(row);
+		}
+	}
+
+	function parkTick(ctx: ExtensionContext, me: AgentRow): void {
+		if (stopping) return;
+		if (me.role !== "project" && me.role !== "group") return;
+		if (!process.env.OMP_TEAMS_PARK) return;
+		const minutes = runtime.configOf(me).reclaim.idle_minutes[me.role];
+		const limit = minutes > 0 ? minutes * 60_000 : 0;
+		if (limit === 0) return;
+		const now = Date.now();
+		if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+			idleSince = 0;
+			return;
+		}
+		if (idleSince === 0) {
+			idleSince = now;
+			return;
+		}
+		if (now - idleSince < limit) return;
+		parkMember(ctx, me);
+	}
+
+	function parkMember(ctx: ExtensionContext, me: AgentRow): void {
+		const parkFile = process.env.OMP_TEAMS_PARK;
+		if (!parkFile) return;
+		stopping = true;
+		const failed = (reason: string): void => {
+			stopping = false;
+			idleSince = 0;
+			logEvent(db, "park:failed", { reason }, me.id);
+		};
+		try {
+			const parked = runtime.park(me);
+			if (!parked.ok) {
+				failed(parked.error);
+				return;
+			}
+			const resume = me.session_file && existsSync(me.session_file) ? me.session_file : null;
+			writeLaunchFile(parkFile, resume ? `${resume}\n` : "");
+			logEvent(db, "park", { seat: me.seat, resume }, me.id);
+			const paneId = me.pane_id ?? currentPaneId();
+			if (paneId) herdr.renamePane(paneId, `${PARKED_GLYPH} ${me.label}`);
+			ctx.shutdown();
+		} catch (error) {
+			failed(String(error));
+		}
 	}
 
 	function renderPresence(ctx: ExtensionContext): void {
 		const me = self;
 		if (!me) return;
-		const parent = me.parent_seat ? runtime.registry.bySeat(me.parent_seat) : null;
+		const parent = me.parent_seat ? runtime.registry.holder(me.parent_seat) : null;
 		const slot = me.role === "worker" ? runtime.slotOf(me) : null;
 		const group = runtime.groupOf(me);
 		const current = isManagerRole(me.role) ? null : runtime.currentTask(me);
@@ -354,6 +407,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 				if (!current || stopping) return;
 				if (isManagerRole(current.role)) managerTick(current);
 				else workerTick(ctx, current);
+				parkTick(ctx, current);
 			});
 		}, Math.max(500, period));
 	}
@@ -399,7 +453,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		self = runtime.me(sessionId);
 		if (!self) {
 			const previous = runtime.registry.lastRowOfSession(sessionId);
-			if (previous?.status === "dead") self = runtime.registry.revive(previous.id, { paneId: currentPaneId(), cwd: ctx.cwd });
+			if (previous) self = runtime.registry.revive(previous.id, { paneId: currentPaneId(), cwd: ctx.cwd });
 		}
 		if (!self) await autoJoin(ctx);
 		if (!self) return;

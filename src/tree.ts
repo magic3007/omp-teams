@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
-import { displayName, RANK_GLYPH, sessionTag } from "./identity";
+import { displayName, PARKED_GLYPH, RANK_GLYPH, sessionTag } from "./identity";
 import { type Painter, PLAIN_PAINTER, truncate } from "./presence";
 import type { TaskRow } from "./queue";
 import type { AgentRow } from "./registry";
@@ -14,12 +14,12 @@ export interface TeamTreeNode {
 }
 
 export function buildTeamTree(runtime: TeamsRuntime, root: AgentRow | null): TeamTreeNode[] {
-	const alive = runtime.registry.allAlive();
-	const pool = alive.map((row) => row.session_id);
-	const bySeat = new Map(alive.map((row) => [row.seat, row]));
+	const members = runtime.registry.allHolders();
+	const pool = members.map((row) => row.session_id);
+	const bySeat = new Map(members.map((row) => [row.seat, row]));
 	const build = (agent: AgentRow, seen: Set<string>): TeamTreeNode => {
 		seen.add(agent.id);
-		const children = alive.filter((row) => row.parent_seat === agent.seat && !seen.has(row.id));
+		const children = members.filter((row) => row.parent_seat === agent.seat && !seen.has(row.id));
 		return {
 			agent,
 			session: sessionTag(agent.session_id, pool),
@@ -30,7 +30,7 @@ export function buildTeamTree(runtime: TeamsRuntime, root: AgentRow | null): Tea
 	};
 	const seen = new Set<string>();
 	if (root) return [build(root, seen)];
-	return alive
+	return members
 		.filter((row) => !row.parent_seat || !bySeat.has(row.parent_seat))
 		.map((row) => build(row, seen));
 }
@@ -75,9 +75,12 @@ function gutter(row: TreeRowView, glyphs: TreeGlyphs): string {
 function rowBody(node: TeamTreeNode, painter: Painter, selfId: string | null): string {
 	const name = painter.paint("accent", `${RANK_GLYPH[node.agent.role]} ${displayName(node.agent.label)}`, true);
 	const you = node.agent.id === selfId ? painter.paint("warning", " (you)") : "";
-	const state = node.task
-		? painter.paint("accent", `${painter.icon("status.running")} ${node.task.id} ${truncate(node.task.title, 44)}`)
-		: painter.paint("dim", `${painter.icon("status.pending")} ${node.integrator ? "waiting for merges" : "idle"}`);
+	const state =
+		node.agent.status === "parked"
+			? painter.paint("dim", `${PARKED_GLYPH} parked`)
+			: node.task
+				? painter.paint("accent", `${painter.icon("status.running")} ${node.task.id} ${truncate(node.task.title, 44)}`)
+				: painter.paint("dim", `${painter.icon("status.pending")} ${node.integrator ? "waiting for merges" : "idle"}`);
 	const session = painter.paint("muted", `session ${node.session}`);
 	return `${name}${you}  ${state}  ${session}`;
 }

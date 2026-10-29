@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ASSIGNABLE_KINDS, TASK_DIFFICULTIES, type TaskDifficulty, type TaskKind } from "./config";
 import type { TeamsHost } from "./host";
+import { PARKED_GLYPH } from "./identity";
 import { TEAMS_TOOLS_FOR } from "./policy";
 import type { AgentRow } from "./registry";
 import { writeDailyReport } from "./report";
@@ -176,7 +177,7 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 				const when = report ? `${Math.round((Date.now() - report.at) / 60000)}m ago` : "never";
 				const flat = report?.summary?.replace(/\s+/g, " ") ?? "-";
 				const summary = flat.length > 400 ? `${flat.slice(0, 400)}… (shortened here; the full report is in its [teams report] message)` : flat;
-				const parked = "";
+				const parked = entry.agent.status === "parked" ? `${PARKED_GLYPH} parked | ` : "";
 				return `${parked}${entry.agent.label} | session ${entry.session} | ${entry.current ? `▶ ${entry.current.id} ${entry.current.title}` : "idle"} | last: ${report?.status ?? "-"} ${when} | ${summary}`;
 			});
 			return text(lines.join("\n"), {

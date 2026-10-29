@@ -110,6 +110,8 @@ export const RANK_GLYPH: Record<Role, string> = {
 	worker: "☆",
 };
 
+export const PARKED_GLYPH = "💤";
+
 export const ROLE_TITLE: Record<Role, string> = {
 	personal: "personal leader",
 	project: "repo leader",

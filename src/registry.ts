@@ -10,7 +10,7 @@ import {
 	shortId,
 } from "./identity";
 
-export type AgentStatus = "alive" | "dead" | "left";
+export type AgentStatus = "alive" | "parked" | "dead" | "left";
 
 export interface AgentRow {
 	id: string;
@@ -86,6 +86,14 @@ export class Registry {
 		);
 	}
 
+	holder(seat: string): AgentRow | null {
+		return (
+			(this.db
+				.query("SELECT * FROM agents WHERE seat = ? AND status IN ('alive','parked')")
+				.get(seat) as AgentRow | null) ?? null
+		);
+	}
+
 	bySession(sessionId: string): AgentRow | null {
 		return (
 			(this.db.query("SELECT * FROM agents WHERE session_id = ? AND status = 'alive'").get(sessionId) as
@@ -115,12 +123,12 @@ export class Registry {
 
 	revive(agentId: string, where: { paneId?: string | null; cwd?: string } = {}): AgentRow | null {
 		const row = this.byId(agentId);
-		if (!row || row.status !== "dead") return null;
+		if (!row || (row.status !== "dead" && row.status !== "parked")) return null;
 		if (this.bySeat(row.seat)) return null;
 		try {
 			this.db.run(
 				`UPDATE agents SET status = 'alive', last_seen = ?, pane_id = COALESCE(?, pane_id), cwd = COALESCE(?, cwd)
-				 WHERE id = ? AND status = 'dead'`,
+				 WHERE id = ? AND status IN ('dead','parked')`,
 				[this.now(), where.paneId ?? null, where.cwd ?? null, agentId],
 			);
 		} catch {
@@ -144,7 +152,7 @@ export class Registry {
 		this.sweepDead();
 		const parent = parentSeatFor(input.role, input.projectId, input.group);
 		if (parent.seat) {
-			if (!this.bySeat(parent.seat)) {
+			if (!this.holder(parent.seat)) {
 				return {
 					ok: false,
 					error: `parent ${parent.role} is not registered. ${nextStepFor(parent.role ?? "personal", input)}`,
@@ -152,8 +160,6 @@ export class Registry {
 			}
 		}
 
-		const existingSelf = this.bySession(input.sessionId);
-		const id = existingSelf?.id ?? `a-${shortId()}`;
 		if (input.role === "worker" && !input.slotId) {
 			return { ok: false, error: "worker registration needs a slot; run /teams join <group> or /teams spawn worker <group>" };
 		}
@@ -163,21 +169,32 @@ export class Registry {
 			group: input.group,
 		});
 
-		if (existingSelf && existingSelf.seat !== seat) {
+		const holder = this.holder(seat);
+		const self = this.bySession(input.sessionId) ?? (holder?.session_id === input.sessionId ? holder : null);
+		if (self && self.seat !== seat) {
 			return {
 				ok: false,
-				error: `this session is already registered as ${existingSelf.label} (${existingSelf.seat}). Run /teams leave first.`,
+				error: `this session is already registered as ${self.label} (${self.seat}). Run /teams leave first.`,
 			};
 		}
-
-		const holder = this.bySeat(seat);
 		if (holder && holder.session_id !== input.sessionId) {
 			const samePane = Boolean(input.takeoverPane) && holder.pane_id === input.takeoverPane;
 			if (input.force || samePane) {
 				this.db.run("UPDATE agents SET status = 'dead' WHERE id = ?", [holder.id]);
 				logEvent(this.db, "takeover", { seat, from: holder.id, reason: input.force ? "force" : "same-pane" }, holder.id, now);
+			} else {
+				return {
+					ok: false,
+					error: `${seat} is already held by ${holder.label} (session ${holder.session_id.slice(0, 12)}…). ${
+						holder.status === "parked"
+							? "It is parked and waits for work; it takes the seat back when it wakes."
+							: "Run /teams status there, or wait for it to stop heartbeating."
+					}`,
+				};
 			}
 		}
+
+		const id = self?.id ?? `a-${shortId()}`;
 
 		const index =
 			input.role === "worker"
@@ -205,7 +222,7 @@ export class Registry {
 			pane_id: input.paneId ?? null,
 			model: input.model ?? null,
 			status: "alive" as AgentStatus,
-			registered_at: existingSelf?.registered_at ?? now,
+			registered_at: self?.registered_at ?? now,
 			last_seen: now,
 		};
 
@@ -242,18 +259,18 @@ export class Registry {
 				);
 			})();
 		} catch (error) {
-			const holder = this.bySeat(seat);
-			if (holder) {
+			const taken = this.holder(seat);
+			if (taken) {
 				return {
 					ok: false,
-					error: `${seat} is already held by ${holder.label} (session ${holder.session_id.slice(0, 12)}…). Run /teams status there, or wait for it to stop heartbeating.`,
+					error: `${seat} is already held by ${taken.label} (session ${taken.session_id.slice(0, 12)}…). Run /teams status there, or wait for it to stop heartbeating.`,
 				};
 			}
 			return { ok: false, error: `registration failed: ${(error as Error).message}` };
 		}
 
-		logEvent(this.db, existingSelf ? "reregister" : "register", { role: input.role, seat }, id, now);
-		return { ok: true, agent: this.byId(id) as AgentRow, created: !existingSelf };
+		logEvent(this.db, self ? "reregister" : "register", { role: input.role, seat }, id, now);
+		return { ok: true, agent: this.byId(id) as AgentRow, created: !self };
 	}
 
 	private nextWorkerIndex(projectId: string | null, group: string | null): number {
@@ -267,7 +284,7 @@ export class Registry {
 
 	childrenOf(seat: string): AgentRow[] {
 		return this.db
-			.query("SELECT * FROM agents WHERE parent_seat = ? AND status = 'alive' ORDER BY role DESC, label")
+			.query("SELECT * FROM agents WHERE parent_seat = ? AND status IN ('alive','parked') ORDER BY role DESC, label")
 			.all(seat) as AgentRow[];
 	}
 
@@ -285,7 +302,7 @@ export class Registry {
 	visibleTo(agent: AgentRow): AgentRow[] {
 		const rows = [agent];
 		if (agent.parent_seat) {
-			const parent = this.bySeat(agent.parent_seat);
+			const parent = this.holder(agent.parent_seat);
 			if (parent) rows.push(parent);
 		}
 		rows.push(...this.childrenOf(agent.seat), ...this.peersOf(agent));
@@ -295,7 +312,7 @@ export class Registry {
 	resolveRef(viewer: AgentRow, ref: string): AgentRow | null {
 		const trimmed = ref.trim();
 		if (!trimmed) return null;
-		if (trimmed === "parent") return viewer.parent_seat ? this.bySeat(viewer.parent_seat) : null;
+		if (trimmed === "parent") return viewer.parent_seat ? this.holder(viewer.parent_seat) : null;
 		const visible = this.visibleTo(viewer);
 		const exact = visible.find(
 			(row) => row.id === trimmed || row.seat === trimmed || row.label === trimmed,
@@ -423,6 +440,15 @@ export class Registry {
 		return this.db
 			.query(
 				`SELECT * FROM agents WHERE status = 'alive'
+				 ORDER BY CASE role WHEN 'personal' THEN 0 WHEN 'project' THEN 1 WHEN 'group' THEN 2 ELSE 3 END, label`,
+			)
+			.all() as AgentRow[];
+	}
+
+	allHolders(): AgentRow[] {
+		return this.db
+			.query(
+				`SELECT * FROM agents WHERE status IN ('alive','parked')
 				 ORDER BY CASE role WHEN 'personal' THEN 0 WHEN 'project' THEN 1 WHEN 'group' THEN 2 ELSE 3 END, label`,
 			)
 			.all() as AgentRow[];

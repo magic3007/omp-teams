@@ -1,8 +1,8 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { TeamsConfig } from "./config";
 import type { Herdr, HerdrResult } from "./herdr";
-import { labelFor, RANK_GLYPH, resolveProject, ROLE_TITLE, type ProjectIdentity } from "./identity";
+import { groupSeat, labelFor, projectSeat, RANK_GLYPH, resolveProject, ROLE_TITLE, workerSeat, type ProjectIdentity } from "./identity";
 import type { AgentRow, GroupRow } from "./registry";
 import type { TeamsRuntime } from "./runtime";
 import { addWorktree, branchHead, currentBranch } from "./worktree";
@@ -18,6 +18,8 @@ export interface SpawnDeps {
 export type SpawnOutcome<T> = { ok: true; value: T } | { ok: false; error: string };
 
 const REPO_TAB = `${RANK_GLYPH.project} ${ROLE_TITLE.project}`;
+
+const GROUP_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 function workerTabLabel(groupName: string): string {
 	return `${RANK_GLYPH.worker} workers · ${groupName}`;
@@ -44,30 +46,92 @@ export function decodeJoin(raw: string): Record<string, string> {
 	return out;
 }
 
+export interface LaunchFiles {
+	script: string;
+	stop: string;
+	park: string;
+	wake: string;
+}
+
+export function launchFiles(home: string, tag: string): LaunchFiles {
+	const dir = join(home, "launch");
+	return {
+		script: join(dir, `${tag}.sh`),
+		stop: join(dir, `${tag}.stop`),
+		park: join(dir, `${tag}.park`),
+		wake: join(dir, `${tag}.wake`),
+	};
+}
+
+export function seatLaunchFiles(home: string, seat: string): LaunchFiles {
+	const tag = launchTag(seat);
+	if (!tag) throw new Error(`${seat} has no launcher`);
+	return launchFiles(home, tag);
+}
+
+export function launchTag(seat: string): string | null {
+	if (seat.startsWith("project:")) return `project-${seat.slice("project:".length)}`;
+	if (seat.startsWith("group:")) {
+		const rest = seat.slice("group:".length);
+		const slash = rest.indexOf("/");
+		if (slash <= 0) return null;
+		return `group-${rest.slice(0, slash)}-${rest.slice(slash + 1)}`;
+	}
+	if (seat.startsWith("worker:")) return `slot-${seat.slice("worker:".length)}`;
+	return null;
+}
+
+export function writeLaunchFile(path: string, content: string): void {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, content);
+}
+
 export function launcherScript(input: {
 	home: string;
+	tag: string;
 	cwd: string;
 	join: string;
 	model: string;
 	maxCostUsd?: number;
-	stopFile: string;
 }): string {
+	const files = launchFiles(input.home, input.tag);
 	const args = ["omp", "--model", shq(input.model)];
 	if (input.maxCostUsd !== undefined && input.maxCostUsd > 0) {
 		args.push("--max-cost", String(input.maxCostUsd));
 	}
+	const run = args.join(" ");
 	const lines = [
 		"#!/bin/sh",
 		`export OMP_TEAMS_HOME=${shq(input.home)}`,
 		`export OMP_TEAMS_JOIN=${shq(input.join)}`,
-		`export OMP_TEAMS_STOP=${shq(input.stopFile)}`,
+		`export OMP_TEAMS_STOP=${shq(files.stop)}`,
+		`export OMP_TEAMS_PARK=${shq(files.park)}`,
+		`export OMP_TEAMS_WAKE=${shq(files.wake)}`,
 		`cd ${shq(input.cwd)} || exit 1`,
 		`rm -f "$OMP_TEAMS_STOP"`,
+		"target=''",
+		'if [ -e "$OMP_TEAMS_PARK" ]; then',
+		'  target=$(cat "$OMP_TEAMS_PARK")',
+		'  rm -f "$OMP_TEAMS_PARK" "$OMP_TEAMS_WAKE"',
+		"fi",
 		"fast=0",
 		"while :; do",
 		"  started=$(date +%s)",
-		`  ${args.join(" ")}`,
+		'  if [ -n "$target" ]; then',
+		`    ${run} --resume "$target"`,
+		"    target=''",
+		"  else",
+		`    ${run}`,
+		"  fi",
 		'  if [ -e "$OMP_TEAMS_STOP" ]; then rm -f "$OMP_TEAMS_STOP"; echo "omp-teams: member stopped"; break; fi',
+		'  if [ -e "$OMP_TEAMS_PARK" ]; then',
+		'    target=$(cat "$OMP_TEAMS_PARK")',
+		'    echo "omp-teams: parked; waiting for work"',
+		'    while [ ! -e "$OMP_TEAMS_WAKE" ]; do sleep 1; done',
+		'    rm -f "$OMP_TEAMS_WAKE" "$OMP_TEAMS_PARK"',
+		"    fast=0",
+		"    continue",
+		"  fi",
 		'  if [ $(( $(date +%s) - started )) -lt 15 ]; then fast=$((fast + 1)); else fast=0; fi',
 		'  if [ "$fast" -ge 3 ]; then echo "omp-teams: omp exited 3 times within 15s; not restarting"; break; fi',
 		"  sleep 2",
@@ -81,13 +145,14 @@ function unwrap<T>(result: HerdrResult<T>): T {
 	return result.value;
 }
 
-function writeLauncher(deps: SpawnDeps, tag: string, input: { cwd: string; join: string; model: string; maxCostUsd?: number }): string {
-	const dir = join(deps.home, "launch");
-	mkdirSync(dir, { recursive: true });
-	const path = join(dir, `${tag}.sh`);
-	writeFileSync(path, launcherScript({ home: deps.home, stopFile: join(dir, `${tag}.stop`), ...input }));
-	chmodSync(path, 0o755);
-	return path;
+function writeLauncher(deps: SpawnDeps, seat: string, input: { cwd: string; join: string; model: string; maxCostUsd?: number }): string {
+	mkdirSync(join(deps.home, "launch"), { recursive: true });
+	const files = seatLaunchFiles(deps.home, seat);
+	const tag = launchTag(seat);
+	if (!tag) throw new Error(`${seat} has no launcher`);
+	writeFileSync(files.script, launcherScript({ home: deps.home, tag, ...input }));
+	chmodSync(files.script, 0o755);
+	return files.script;
 }
 
 function requireRole(actor: AgentRow, expected: "personal" | "project" | "group"): SpawnOutcome<true> {
@@ -115,12 +180,12 @@ export function spawnProject(
 
 	const project = resolveProject(resolve(options.repoPath));
 	if (!project) return { ok: false, error: `${options.repoPath} is not inside a git repository` };
-	const existing = deps.runtime.registry.bySeat(`project:${project.id}`);
+	const existing = deps.runtime.registry.holder(`project:${project.id}`);
 	if (existing) {
 		return { ok: false, error: `${existing.label} already manages ${project.name} (session ${existing.session_id.slice(0, 12)}…)` };
 	}
 
-	const script = writeLauncher(deps, `project-${project.id}`, {
+	const script = writeLauncher(deps, projectSeat(project.id), {
 		cwd: project.root,
 		join: encodeJoin({ role: "project", project: project.id }),
 		model: deps.config.models.role.project,
@@ -165,6 +230,12 @@ export function spawnGroup(
 ): SpawnOutcome<SpawnedGroup> {
 	const allowed = requireRole(actor, "project");
 	if (!allowed.ok) return allowed;
+	if (!GROUP_NAME.test(options.name)) {
+		return {
+			ok: false,
+			error: `"${options.name}" cannot name a group: use lowercase letters, digits and "-", for example "cli-docs".`,
+		};
+	}
 	const stopped = deps.runtime.stopReason(actor);
 	if (stopped) return { ok: false, error: `nothing is spawned: ${stopped}.` };
 	if (!actor.project_id) return { ok: false, error: `${actor.label} has no project id` };
@@ -174,7 +245,7 @@ export function spawnGroup(
 	if (!workspaceId) {
 		return { ok: false, error: `${actor.label} has no herdr workspace yet; spawn the project lead with /teams spawn project first` };
 	}
-	const existing = deps.runtime.registry.bySeat(`group:${actor.project_id}/${options.name}`);
+	const existing = deps.runtime.registry.holder(`group:${actor.project_id}/${options.name}`);
 	if (existing) return { ok: false, error: `${existing.label} already leads group ${options.name}` };
 
 	const worktreePath = resolve(deps.config.worktree_root, actor.project_id, options.name, "group");
@@ -191,7 +262,7 @@ export function spawnGroup(
 		head: branchHead(worktreePath),
 	});
 
-	const script = writeLauncher(deps, `group-${actor.project_id}-${options.name}`, {
+	const script = writeLauncher(deps, groupSeat(actor.project_id, options.name), {
 		cwd: worktreePath,
 		join: encodeJoin({ role: "group", project: actor.project_id, group: options.name }),
 		model: deps.config.models.role.group,
@@ -211,6 +282,37 @@ export function spawnGroup(
 	} catch (error) {
 		return { ok: false, error: (error as Error).message };
 	}
+}
+
+export interface RelaunchedSeat {
+	paneId: string;
+	tabId: string;
+	script: string;
+}
+
+export function relaunchSeat(deps: SpawnDeps, holder: AgentRow): SpawnOutcome<RelaunchedSeat> {
+	if (!launchTag(holder.seat)) return { ok: false, error: `${holder.label} has no launcher of its own.` };
+	const files = seatLaunchFiles(deps.home, holder.seat);
+	if (!existsSync(files.script)) return { ok: false, error: `the launcher script for ${holder.label} is gone.` };
+	const projectId = holder.project_id ?? "";
+	const group = holder.group_name ? deps.runtime.registry.group(projectId, holder.group_name) : null;
+	const workspaceId = group?.workspace_id ?? deps.runtime.registry.projectWorkspace(projectId);
+	if (!workspaceId) return { ok: false, error: `${holder.label} has no herdr workspace to come back to.` };
+	const cwd = group?.worktree ?? deps.runtime.registry.projectRoot(projectId) ?? holder.cwd;
+	const label = holder.role === "project" ? REPO_TAB : labelFor("group", { group: holder.group_name ?? "group" });
+	const tab = deps.herdr.createTab(workspaceId, cwd, label);
+	if (!tab.ok) return tab;
+	const ran = deps.herdr.runInPane(tab.value.paneId, `sh ${shq(files.script)}`);
+	if (!ran.ok) return ran;
+	deps.runtime.registry.setPane(holder.id, tab.value.paneId);
+	if (holder.role === "group" && holder.project_id && holder.group_name) {
+		deps.runtime.registry.setGroupLayout(holder.project_id, holder.group_name, {
+			workspaceId,
+			tabId: tab.value.tabId,
+			leadPaneId: tab.value.paneId,
+		});
+	}
+	return { ok: true, value: { paneId: tab.value.paneId, tabId: tab.value.tabId, script: files.script } };
 }
 
 export interface SpawnedWorker {
@@ -269,7 +371,7 @@ export function spawnWorker(deps: SpawnDeps, actor: AgentRow, options: { count?:
 			worktree: worktreePath,
 			branch,
 		});
-		const script = writeLauncher(deps, `slot-${slot.id}`, {
+		const script = writeLauncher(deps, workerSeat(slot.id), {
 			cwd: worktreePath,
 			join: encodeJoin({ role: "worker", project: projectId, group: groupName, slot: slot.id }),
 			model: config.models.routing.default,
@@ -315,7 +417,7 @@ export function spawnIntegrator(deps: SpawnDeps, actor: AgentRow, group: GroupRo
 	});
 	const anchor = group.lead_pane_id ?? actor.pane_id;
 	if (!anchor) return { ok: false, error: "no group lead pane to place the integrator beside" };
-	const script = writeLauncher(deps, `slot-${slot.id}`, {
+	const script = writeLauncher(deps, workerSeat(slot.id), {
 		cwd: group.worktree,
 		join: encodeJoin({ role: "worker", project: actor.project_id, group: actor.group_name, slot: slot.id }),
 		model: deps.config.models.routing.by_kind.merge ?? deps.config.models.role.integrator,

@@ -10,9 +10,28 @@ const config: Record<string, string[]> = {
 	bootstrap: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
 	rebuild: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
 	fresh: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200", "rate_limits:", "  fresh_per_hour: 1"],
+	park: [
+		"poll_ms: 700",
+		"patrol_minutes: 0.2",
+		"limits:",
+		"  dead_after_seconds: 20",
+		"guards:",
+		"  budget:",
+		"    daily_usd: 200",
+		"reclaim:",
+		"  idle_minutes:",
+		"    project: 0.3",
+		"    group: 0.3",
+	],
 };
 
 const h = createHarness(`m3-${mode}`, config[mode] ?? config.guards ?? []);
+
+
+function paneRunsOmp(paneId: string): boolean {
+	const result = Bun.spawnSync(["herdr", "pane", "process-info", "--pane", paneId], { stdout: "pipe", stderr: "pipe" });
+	return result.stdout.toString().includes('"name":"omp"');
+}
 
 function paneText(paneId: string, lines = 60): string {
 	return Bun.spawnSync(["herdr", "pane", "read", paneId, "--source", "recent-unwrapped", "--lines", String(lines)], {
@@ -187,6 +206,70 @@ async function main(): Promise<void> {
 		run(h, projectPane, "call the teams_write_report tool once, then report done with its path");
 		const written = await waitFor(() => existsSync(path), 180_000, "teams_write_report wrote the file");
 		check(h, "the `teams_write_report` tool writes the report", written, path);
+	}
+
+	if (mode === "park") {
+		const parkedRow = (): { seat: string; pane_id: string | null; session_id: string; session_file: string | null } | null =>
+			queryOne<{ seat: string; pane_id: string | null; session_id: string; session_file: string | null }>(
+				h,
+				"SELECT seat, pane_id, session_id, session_file FROM agents WHERE role IN ('project','group') AND status = 'parked' ORDER BY role = 'project' DESC LIMIT 1",
+			);
+		const parked = await waitFor(() => parkedRow() !== null, 600_000, "a launcher-started leader parked");
+		const before = parkedRow();
+		check(h, "a launcher-started leader parks when it sits idle", parked && before !== null, `${before?.seat ?? "none"} parked`);
+		const parkedLine = await waitFor(
+			() => paneText(before?.pane_id ?? "").includes("omp-teams: parked; waiting for work"),
+			60_000,
+			"the launcher printed the parked line",
+		);
+		check(h, "the launcher keeps the pane and prints the parked line", parkedLine, lastLines(before?.pane_id ?? projectPane, 4));
+		const noOmp = await waitFor(() => !paneRunsOmp(before?.pane_id ?? ""), 60_000, "omp left the parked pane");
+		check(h, "the parked pane runs no omp process", noOmp, lastLines(before?.pane_id ?? projectPane, 4));
+		const saved = Boolean(before?.session_file && existsSync(before.session_file));
+		const projectSeat = queryOne<{ seat: string }>(h, "SELECT seat FROM agents WHERE role = 'project' LIMIT 1")?.seat ?? "";
+
+		run(
+			h,
+			personalPane,
+			`/teams assign ${h.repo} docs trivial Write one line into note.txt, commit it and report done with the sha.`,
+		);
+		const woke = await waitFor(
+			() =>
+				(queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM agents WHERE seat = ? AND status = 'alive'", [
+					before?.seat ?? "",
+				])?.n ?? 0) === 1,
+			300_000,
+			"the parked leader woke up",
+		);
+		check(h, "a request through the personal leader wakes the parked leader", woke, lastLines(personalPane, 4));
+		const holder = queryOne<{ session_id: string }>(h, "SELECT session_id FROM agents WHERE seat = ? AND status = 'alive'", [
+			before?.seat ?? "",
+		]);
+		check(
+			h,
+			saved ? "the woken leader resumes its saved session" : "a leader with no transcript comes back as a fresh session",
+			saved ? holder?.session_id === before?.session_id : holder !== null && holder.session_id !== before?.session_id,
+			`${before?.session_id ?? "-"} -> ${holder?.session_id ?? "no holder"} (saved: ${saved})`,
+		);
+		const delivered = await waitFor(
+			() =>
+				(queryOne<{ n: number }>(
+					h,
+					"SELECT COUNT(*) AS n FROM messages WHERE to_seat = ? AND kind = 'task' AND delivered_at IS NOT NULL",
+					[projectSeat],
+				)?.n ?? 0) >= 1,
+			120_000,
+			"the task mail reached the woken leader",
+		);
+		check(h, "the task mail reaches the woken leader", delivered, lastLines(personalPane, 4));
+		const finished = await waitFor(
+			() =>
+				(queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM tasks WHERE to_seat = ? AND status = 'done'", [projectSeat])?.n ??
+					0) >= 1,
+			600_000,
+			"the woken leader finished the task",
+		);
+		check(h, "the woken leader finishes the task", finished, lastLines(personalPane, 4));
 	}
 
 	run(h, personalPane, "/teams digest");

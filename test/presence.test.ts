@@ -35,7 +35,7 @@ function agent(overrides: Partial<AgentRow>): AgentRow {
 	};
 }
 
-const counts = { projects: 3, groups: 4, workers: 18, queued: 3, running: 5, done: 7, blocked: 0, unread: 0 };
+const counts = { projects: 3, groups: 4, workers: 18, queued: 3, running: 5, done: 7, blocked: 0, unread: 0, parked: 0 };
 
 function input(overrides: Partial<PresenceInput>): PresenceInput {
 	return {

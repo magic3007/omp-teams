@@ -31,7 +31,7 @@ export interface TeamsConfig {
 	patrol_minutes: number;
 	max_task_failures: number;
 	rotate: { tasks: number; context_pct: number };
-	report_interval_minutes: number;
+	reclaim: { idle_minutes: { project: number; group: number } };
 	guards: {
 		budget: {
 			daily_usd: number;
@@ -100,7 +100,7 @@ export const DEFAULT_CONFIG: TeamsConfig = {
 	patrol_minutes: 5,
 	max_task_failures: 2,
 	rotate: { tasks: 5, context_pct: 70 },
-	report_interval_minutes: 15,
+	reclaim: { idle_minutes: { project: 30, group: 30 } },
 	guards: {
 		budget: {
 			daily_usd: 200,

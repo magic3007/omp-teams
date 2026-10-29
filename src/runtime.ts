@@ -9,6 +9,7 @@ import { isManagerRole } from "./policy";
 import { ACTIVE_STATUSES, TaskQueue, type TaskRow, taskPaths, taskTitle } from "./queue";
 import { type AgentRow, type GroupRow, type RegisterInput, type RegisterResult, Registry } from "./registry";
 import { type SlotKind, type SlotRow, Slots } from "./slots";
+import { seatLaunchFiles, writeLaunchFile } from "./spawn";
 import { branchHead, changedFiles, commitExists, currentBranch, isAncestor } from "./worktree";
 
 export type { TaskRow };
@@ -98,7 +99,7 @@ export class TeamsRuntime {
 			deadAfterMs: options.deadAfterMs ?? loadConfig(undefined, options.home).limits.dead_after_seconds * 1000,
 			now,
 		});
-		this.mailer = new Mailer(options.db, now);
+		this.mailer = new Mailer(options.db, now, (seat) => this.wakeSeat(seat));
 		this.slots = new Slots(options.db, now);
 		this.queue = new TaskQueue(options.db, now);
 	}
@@ -298,6 +299,32 @@ export class TeamsRuntime {
 		this.registry.markStatus(agent.id, "left");
 	}
 
+	park(agent: AgentRow): { ok: true } | { ok: false; error: string } {
+		return this.options.db
+			.transaction((): { ok: true } | { ok: false; error: string } => {
+				const pending = this.options.db
+					.query("SELECT COUNT(*) AS n FROM messages WHERE to_seat = ? AND delivered_at IS NULL")
+					.get(agent.seat) as { n: number };
+				if (pending.n > 0) {
+					return { ok: false, error: `${pending.n} undelivered message(s) wait for ${agent.seat}` };
+				}
+				const updated = this.options.db.run(
+					"UPDATE agents SET status = 'parked', last_seen = ? WHERE id = ? AND status = 'alive'",
+					[this.now(), agent.id],
+				);
+				if (updated.changes === 0) return { ok: false, error: `${agent.label} is not alive` };
+				return { ok: true };
+			})
+			.immediate();
+	}
+
+	wakeSeat(seat: string): boolean {
+		const holder = this.registry.holder(seat);
+		if (!holder || holder.status !== "parked") return false;
+		writeLaunchFile(seatLaunchFiles(this.home, holder.seat).wake, "");
+		return true;
+	}
+
 	slotOf(agent: AgentRow): SlotRow | null {
 		const slotId = slotOfSeat(agent.seat);
 		return slotId ? this.slots.byId(slotId) : null;
@@ -487,7 +514,7 @@ export class TeamsRuntime {
 		if (!viewer.parent_seat) {
 			return { ok: false, error: `${viewer.label} has no manager to report to.` };
 		}
-		const parent = this.registry.bySeat(viewer.parent_seat);
+		const parent = this.registry.holder(viewer.parent_seat);
 		if (!parent) {
 			return {
 				ok: false,
@@ -609,7 +636,7 @@ export class TeamsRuntime {
 		if (group && isAncestor(group.worktree, sha, "HEAD")) return null;
 		const groupSeat = worker.parent_seat;
 		if (!groupSeat) return null;
-		const lead = this.registry.bySeat(groupSeat);
+		const lead = this.registry.holder(groupSeat);
 		const config = this.configOf(worker);
 		const resolved = resolveModel(config, { kind: "merge", difficulty: "trivial" });
 		const model = "error" in resolved ? null : resolved.model;
@@ -779,7 +806,7 @@ export class TeamsRuntime {
 	}
 
 	sessionPool(): string[] {
-		return this.registry.allAlive().map((row) => row.session_id);
+		return this.registry.allHolders().map((row) => row.session_id);
 	}
 
 	pause(viewer: AgentRow, groupName: string, paused: boolean): { ok: true } | { ok: false; error: string } {
@@ -844,8 +871,8 @@ export class TeamsRuntime {
 		for (const task of issued) {
 			if (ACTIVE_STATUSES.includes(task.status) && task.to_agent) {
 				const owner = this.registry.byId(task.to_agent);
-				if (owner?.status !== "alive") {
-					const holder = task.to_seat ? this.registry.bySeat(task.to_seat) : null;
+				if (owner && owner.status !== "alive" && owner.status !== "parked") {
+					const holder = task.to_seat ? this.registry.holder(task.to_seat) : null;
 					if (holder && holder.id !== task.to_agent) {
 						this.options.db.transaction(() => {
 							this.queue.inherit(task.id, holder.id, task.attempts + 1);
@@ -1047,8 +1074,9 @@ export class TeamsRuntime {
 		done: number;
 		blocked: number;
 		unread: number;
+		parked: number;
 	} {
-		const members = this.registry.allAlive();
+		const members = this.registry.allHolders();
 		const inScope = (row: AgentRow): boolean => {
 			if (agent.role === "personal") return true;
 			if (!agent.project_id) return false;
@@ -1083,6 +1111,7 @@ export class TeamsRuntime {
 			done: countOf("done"),
 			blocked: countOf("blocked"),
 			unread: unread.n,
+			parked: scoped.filter((row) => row.status === "parked").length,
 		};
 	}
 

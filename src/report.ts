@@ -2,7 +2,7 @@ import type { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dayKey, formatUsd } from "./guard";
-import { git, sessionTag } from "./identity";
+import { git, PARKED_GLYPH, sessionTag } from "./identity";
 
 export interface ReportInput {
 	db: Database;
@@ -117,10 +117,14 @@ function usageLines(db: Database, day: string): { seat: string; model: string | 
 
 function members(db: Database): { label: string; session: string; file: string | null }[] {
 	const rows = db
-		.query("SELECT label, session_id, session_file FROM agents WHERE status = 'alive' ORDER BY label")
-		.all() as { label: string; session_id: string; session_file: string | null }[];
+		.query("SELECT label, session_id, session_file, status FROM agents WHERE status IN ('alive','parked') ORDER BY label")
+		.all() as { label: string; session_id: string; session_file: string | null; status: string }[];
 	const pool = rows.map((row) => row.session_id);
-	return rows.map((row) => ({ label: row.label, session: sessionTag(row.session_id, pool), file: row.session_file }));
+	return rows.map((row) => ({
+		label: row.status === "parked" ? `${PARKED_GLYPH} ${row.label}` : row.label,
+		session: sessionTag(row.session_id, pool),
+		file: row.session_file,
+	}));
 }
 
 export function writeDailyReport(input: ReportInput): { markdown: string; path: string } {

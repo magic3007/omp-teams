@@ -173,7 +173,7 @@ describe("join contract", () => {
 			join: "role=worker group=feat-x slot=s-1",
 			model: "deepseek/deepseek-v4-flash",
 			maxCostUsd: 50,
-			stopFile: "/home/u/.omp/teams/launch/slot-s-1.stop",
+			tag: "slot-s-1",
 		});
 		expect(script).toContain("export OMP_TEAMS_HOME='/home/u/.omp/teams'");
 		expect(script).toContain("export OMP_TEAMS_JOIN='role=worker group=feat-x slot=s-1'");
@@ -188,7 +188,7 @@ describe("join contract", () => {
 			cwd: "/tmp",
 			join: "role=personal",
 			model: "m",
-			stopFile: "/tmp/x.stop",
+			tag: "personal",
 		});
 		expect(script).toContain(`export OMP_TEAMS_HOME='/home/o'\\''brien/teams'`);
 	});

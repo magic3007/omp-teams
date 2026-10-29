@@ -5,7 +5,7 @@ import { taskPaths, type TaskRow } from "./queue";
 import type { AgentRow } from "./registry";
 import { findRepository } from "./repos";
 import { NO_OPEN_TASK, type TeamsRuntime } from "./runtime";
-import { spawnGroup, spawnProject, spawnWorker, type SpawnDeps } from "./spawn";
+import { spawnGroup, spawnProject, spawnWorker, relaunchSeat, type SpawnDeps } from "./spawn";
 
 export interface RouteDeps {
 	runtime: TeamsRuntime;
@@ -82,6 +82,16 @@ function deliver(deps: RouteDeps, actor: AgentRow, target: AgentRow | null, deli
 	return { ok: true, taskId: assigned.taskId, to: target, started, model: assigned.model };
 }
 
+async function wakeParked(deps: RouteDeps, holder: AgentRow): Promise<AgentRow | null> {
+	deps.runtime.wakeSeat(holder.seat);
+	const panes = deps.spawn?.herdr.listPanes();
+	if (deps.spawn && !(panes?.ok && panes.value.some((pane) => pane.pane_id === holder.pane_id))) {
+		const relaunched = relaunchSeat(deps.spawn, holder);
+		if (!relaunched.ok) return null;
+	}
+	return deps.awaitMember(holder.seat);
+}
+
 async function ensureRepoLeader(deps: RouteDeps, actor: AgentRow, name: string): Promise<Ensured> {
 	const config = deps.runtime.configOf(actor);
 	const found = findRepository(name, {
@@ -93,6 +103,12 @@ async function ensureRepoLeader(deps: RouteDeps, actor: AgentRow, name: string):
 	const seat = projectSeat(found.project.id);
 	const live = deps.runtime.registry.bySeat(seat);
 	if (live) return { ok: true, agent: live, started: null };
+	const parked = deps.runtime.registry.holder(seat);
+	if (parked) {
+		const woken = await wakeParked(deps, parked);
+		if (woken) return { ok: true, agent: woken, started: null };
+		return { ok: false, error: `${parked.label} is parked and did not come back.` };
+	}
 	if (!deps.spawn) return { ok: false, error: `${found.project.name} has no repo leader and starting one needs a herdr pane.` };
 	const spawned = spawnProject(deps.spawn, actor, { repoPath: found.project.root });
 	if (!spawned.ok) return spawned;
@@ -106,6 +122,12 @@ async function ensureGroupLeader(deps: RouteDeps, actor: AgentRow, name: string)
 	const seat = groupSeat(actor.project_id, name);
 	const live = deps.runtime.registry.bySeat(seat);
 	if (live) return { ok: true, agent: live, started: null };
+	const parked = deps.runtime.registry.holder(seat);
+	if (parked) {
+		const woken = await wakeParked(deps, parked);
+		if (woken) return { ok: true, agent: woken, started: null };
+		return { ok: false, error: `${parked.label} is parked and did not come back.` };
+	}
 	if (!deps.spawn) return { ok: false, error: `group ${name} has no leader and starting one needs a herdr pane.` };
 	const spawned = spawnGroup(deps.spawn, actor, { name });
 	if (!spawned.ok) return spawned;
@@ -144,7 +166,12 @@ export async function assignWork(deps: RouteDeps, actor: AgentRow, request: Work
 	};
 
 	const direct = subordinate(actor, to, deps.runtime);
-	if (direct) return deliver(deps, actor, direct, delivery, null);
+	if (direct) {
+		if (direct.status !== "parked") return deliver(deps, actor, direct, delivery, null);
+		const woken = await wakeParked(deps, direct);
+		if (!woken) return { ok: false, error: `${direct.label} is parked and did not come back.` };
+		return deliver(deps, actor, woken, delivery, null);
+	}
 	if (actor.role === "personal") {
 		const ensured = await ensureRepoLeader(deps, actor, to);
 		if (!ensured.ok) return ensured;

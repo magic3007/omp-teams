@@ -122,6 +122,7 @@ export class Mailer {
 	constructor(
 		private readonly db: Database,
 		private readonly now: () => number = Date.now,
+		private readonly onWake: (seat: string) => void = () => {},
 	) {}
 
 	send(input: {
@@ -135,6 +136,7 @@ export class Mailer {
 	}): string {
 		const id = `m-${shortId()}`;
 		const at = this.now();
+		const wake = wakeFor(input.kind, input.body) ? 1 : 0;
 		this.db.run(
 			`INSERT INTO messages (id, from_agent, from_seat, to_seat, to_agent, kind, wake, body, created_at, task_id)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -145,13 +147,14 @@ export class Mailer {
 				input.toSeat,
 				input.toAgent ?? null,
 				input.kind,
-				wakeFor(input.kind, input.body) ? 1 : 0,
+				wake,
 				JSON.stringify(input.body),
 				at,
 				input.taskId ?? input.body.task_id ?? null,
 			],
 		);
 		logEvent(this.db, "mail:send", { kind: input.kind, toSeat: input.toSeat, msgId: id }, input.fromAgent, at);
+		if (wake) this.onWake(input.toSeat);
 		return id;
 	}
 

@@ -145,6 +145,29 @@ describe("mailbox", () => {
 	});
 });
 
+describe("wake hook", () => {
+	test("waking mail calls the hook once for its seat and passive mail does not", () => {
+		const woken: string[] = [];
+		const hooked = new Mailer(db, () => 1_000, (seat) => woken.push(seat));
+		hooked.send({
+			fromAgent: "a-1",
+			fromSeat: "personal",
+			toSeat: "project:p-1",
+			kind: "ask",
+			body: { text: "which branch?" },
+		});
+		expect(woken).toEqual(["project:p-1"]);
+		hooked.send({
+			fromAgent: "a-2",
+			fromSeat: "group:p-1/feat-x",
+			toSeat: "project:p-1",
+			kind: "report",
+			body: { status: "progress", summary: "half way" },
+		});
+		expect(woken).toEqual(["project:p-1"]);
+	});
+});
+
 describe("acknowledgement scanning", () => {
 	test("message ids are read from persisted team-mail entries only", () => {
 		const ids = persistedMsgIds([

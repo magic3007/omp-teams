@@ -4,7 +4,7 @@ import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskDifficulty, TaskKind } from "./config";
 import type { TeamsHost } from "./host";
-import { git, resolveProject, type Role } from "./identity";
+import { git, PARKED_GLYPH, resolveProject, type Role } from "./identity";
 import { type SpawnDeps, spawnGroup, spawnProject, spawnWorker } from "./spawn";
 import { awaitSeat, assignWork, queueWork, routeDeps } from "./route";
 import { describeRebuild, rebuildMachine } from "./rebuild";
@@ -603,7 +603,7 @@ export function registerTeamsCommands(
 						`model:    ${me.model ?? "-"}`,
 						`session:  ${me.session_file ?? me.session_id}`,
 						`alive:    ${Math.round((Date.now() - me.last_seen) / 1000)}s since heartbeat`,
-						`direct reports: ${children.length === 0 ? "none" : children.map((row) => row.label).join(", ")}`,
+						`direct reports: ${children.length === 0 ? "none" : children.map((row) => `${row.status === "parked" ? `${PARKED_GLYPH} ` : ""}${row.label}`).join(", ")}`,
 					];
 					host.notify(lines.join("\n"), "info");
 					return;
@@ -668,9 +668,10 @@ export function registerTeamsCommands(
 					const lines = entries.map((entry) => {
 						const report = entry.lastReport;
 						const when = report ? `${Math.round((Date.now() - report.at) / 60000)}m ago` : "never";
-						const status = report?.status ?? "unknown";
+						const status = entry.agent.status === "parked" ? "parked" : (report?.status ?? "unknown");
 						const summary = report?.summary?.replace(/\s+/g, " ").slice(0, 160) ?? "";
-						return `${entry.agent.label}  ${status}  ${report?.taskId ?? ""}  ${when}  ${summary}`.trim();
+						const mark = entry.agent.status === "parked" ? `${PARKED_GLYPH} ` : "";
+						return `${mark}${entry.agent.label}  ${status}  ${report?.taskId ?? ""}  ${when}  ${summary}`.trim();
 					});
 					host.notify(lines.join("\n"), "info");
 					return;

@@ -1,25 +1,16 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Herdr } from "./herdr";
-import { labelFor, RANK_GLYPH, ROLE_TITLE } from "./identity";
-import type { AgentRow, GroupRow } from "./registry";
+import { groupSeat, labelFor, projectSeat, RANK_GLYPH, ROLE_TITLE, workerSeat } from "./identity";
+import type { GroupRow } from "./registry";
 import type { TeamsRuntime } from "./runtime";
 import type { SlotRow } from "./slots";
+import { seatLaunchFiles } from "./spawn";
 
 export interface RebuildDeps {
 	runtime: TeamsRuntime;
 	herdr: Herdr;
 	home: string;
-}
-
-export async function waitForSeat(runtime: TeamsRuntime, seat: string, timeoutMs: number): Promise<AgentRow | null> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const row = runtime.registry.bySeat(seat);
-		if (row) return row;
-		await Bun.sleep(500);
-	}
-	return null;
 }
 
 interface PaneInfo {
@@ -41,14 +32,9 @@ function tabExists(panes: PaneInfo[], tabId: string | null): boolean {
 	return tabId !== null && panes.some((pane) => pane.tab_id === tabId);
 }
 
-function launcher(deps: RebuildDeps, tag: string): string | null {
-	const path = join(deps.home, "launch", `${tag}.sh`);
-	return existsSync(path) ? path : null;
-}
-
-function relaunch(deps: RebuildDeps, paneId: string, tag: string): boolean {
-	const script = launcher(deps, tag);
-	if (!script) return false;
+function relaunch(deps: RebuildDeps, paneId: string, seat: string): boolean {
+	const script = seatLaunchFiles(deps.home, seat).script;
+	if (!existsSync(script)) return false;
 	const result = deps.herdr.runInPane(paneId, `sh ${JSON.stringify(script)}`);
 	return result.ok;
 }
@@ -113,7 +99,7 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 	for (const project of projects) {
 		const workspaceId = ensureWorkspace(project.id, project.root, project.name);
 		if (!workspaceId) continue;
-		const lead = runtime.registry.bySeat(`project:${project.id}`);
+		const lead = runtime.registry.holder(`project:${project.id}`);
 		if (!lead) continue;
 		if (paneExists(panes, lead.pane_id)) continue;
 		const tabId = ensureTab(workspaceId, project.root, `${RANK_GLYPH.project} ${ROLE_TITLE.project}`, null);
@@ -123,7 +109,7 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 			result.missing.push(`repo leader pane for ${project.name}`);
 			continue;
 		}
-		if (relaunch(deps, paneId, `project-${project.id}`)) {
+		if (relaunch(deps, paneId, projectSeat(project.id))) {
 			runtime.registry.setPane(lead.id, paneId);
 			result.relaunched.push(lead.label);
 		} else {
@@ -135,7 +121,7 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 	for (const group of groups) {
 		const workspaceId = ensureWorkspace(group.project_id, runtime.registry.projectRoot(group.project_id) ?? group.worktree, group.project_id);
 		if (!workspaceId) continue;
-		const lead = runtime.registry.bySeat(`group:${group.project_id}/${group.name}`);
+		const lead = runtime.registry.holder(`group:${group.project_id}/${group.name}`);
 		if (lead && paneExists(panes, lead.pane_id)) continue;
 		const tabId = ensureTab(
 			workspaceId,
@@ -150,7 +136,7 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 			if (lead) result.missing.push(`group lead pane for ${group.name}`);
 			continue;
 		}
-		if (relaunch(deps, paneId, `group-${group.project_id}-${group.name}`)) {
+		if (relaunch(deps, paneId, groupSeat(group.project_id, group.name))) {
 			runtime.registry.setPane(lead.id, paneId);
 			result.relaunched.push(lead.label);
 		} else {
@@ -176,7 +162,7 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 		if (!tabId) continue;
 		const paneId = ensurePane(tabId, slot.worktree, null);
 		if (!paneId) continue;
-		if (relaunch(deps, paneId, `slot-${slot.id}`)) {
+		if (relaunch(deps, paneId, workerSeat(slot.id))) {
 			runtime.slots.bind(slot.id, { paneId, tabId });
 			result.relaunched.push(`slot ${slot.index_no} of ${group.name}`);
 		} else {
