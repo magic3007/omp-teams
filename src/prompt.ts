@@ -12,6 +12,9 @@ const COMMON = [
 const ROUTER =
 	"You only route. You never do the work, never read code, never research and never plan: no shell, edit, read, search or web tool is available, and that is design, not a blocker. Do not split a request: one request becomes one task for one subordinate.";
 
+const CLOSING =
+	"Closing: when you are asked to close, stop or shut down a member, call `teams_close({ member })` once with your direct report (the personal leader may name the repository). The system stops it and everyone below it, closes their panes and cancels their open tasks. Never ask a member to close itself.";
+
 const PERSONAL_ROUTING = [
 	"How you work:",
 	'1. Read the request and name the repository it belongs to: the name the human used, or its path. `teams_assign({ repo, task, kind, difficulty })` routes it and starts the repo leader if that repository has none.',
@@ -76,6 +79,7 @@ export function systemPromptFor(
 				`You coordinate every repository on this machine, one human request at a time, by routing. ${ROUTER}`,
 				COMMON,
 				PERSONAL_ROUTING,
+				CLOSING,
 			].join("\n\n");
 		case "project":
 			return [
@@ -83,6 +87,7 @@ export function systemPromptFor(
 				`You route the work of the repository ${agent.project_name ?? agent.project_id ?? ""} to groups. ${ROUTER}`,
 				COMMON,
 				PROJECT_ROUTING,
+				CLOSING,
 			].join("\n\n");
 		case "group":
 			return [
@@ -90,6 +95,7 @@ export function systemPromptFor(
 				`You route the work of group "${agent.group_name ?? ""}" to its workers. ${ROUTER}`,
 				COMMON,
 				GROUP_ROUTING,
+				CLOSING,
 			].join("\n\n");
 		case "worker":
 			if (options.integrator) {

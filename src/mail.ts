@@ -184,6 +184,16 @@ export class Mailer {
 		tx(ids);
 	}
 
+	discardInbox(seats: string[]): void {
+		if (seats.length === 0) return;
+		const at = this.now();
+		const stmt = this.db.prepare("UPDATE messages SET delivered_at = ?, acked_at = ? WHERE to_seat = ? AND delivered_at IS NULL");
+		const tx = this.db.transaction((values: string[]) => {
+			for (const seat of values) stmt.run(at, at, seat);
+		});
+		tx(seats);
+	}
+
 	recentReports(toSeat: string, limit = 200): MailRow[] {
 		return this.db
 			.query(

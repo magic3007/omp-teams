@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ASSIGNABLE_KINDS, TASK_DIFFICULTIES, type TaskDifficulty, type TaskKind } from "./config";
 import type { TeamsHost } from "./host";
-import { PARKED_GLYPH } from "./identity";
+import { PARKED_GLYPH, sessionTag } from "./identity";
 import { TEAMS_TOOLS_FOR } from "./policy";
 import type { AgentRow } from "./registry";
 import { writeDailyReport } from "./report";
@@ -65,6 +65,12 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 
 	const retireSchema = z.object({
 		worker: z.string().describe("Worker label, agent id or seat"),
+	});
+
+	const closeSchema = z.object({
+		member: z
+			.string()
+			.describe("Direct report to close: its label, agent id or seat. The personal leader may also name the repository."),
 	});
 
 	const pauseSchema = z.object({
@@ -213,6 +219,29 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 			const result = runtime.retire(member.me, params.worker);
 			if (!result.ok) return text(`ERROR: ${result.error}`, { ok: false });
 			return text(`${result.agent?.label ?? result.slot.id} will stop after its current task.`, { ok: true });
+		},
+	});
+
+	pi.registerTool({
+		name: "teams_close",
+		label: "Close a member and everyone below it",
+		description:
+			"Close one direct report and its whole subtree now: their sessions stop, their panes close, their open tasks are cancelled. Worktrees and branches stay. Use it when the human asks to close, stop or shut down a leader or worker.",
+		parameters: closeSchema,
+		defaultInactive: true,
+		execute: async (_toolCallId, params) => {
+			const member = requireMember(host);
+			if (!member.ok) return text(member.message, { ok: false });
+			const result = runtime.close(member.me, params.member);
+			if (!result.ok) return text(`ERROR: ${result.error}`, { ok: false });
+			const pool = runtime.sessionPool();
+			const lines = result.closed.map((row) => `- ${row.label} | session ${sessionTag(row.session_id, pool)} | was ${row.status}`);
+			const cancelled = result.cancelled.length > 0 ? `cancelled tasks: ${result.cancelled.join(", ")}` : "no open tasks";
+			return text([`closed ${result.closed.length} member(s):`, ...lines, cancelled].join("\n"), {
+				ok: true,
+				closed: result.closed.map((row) => row.id),
+				cancelled: result.cancelled,
+			});
 		},
 	});
 

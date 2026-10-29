@@ -5,8 +5,8 @@ import { expandHome, type Role } from "./identity";
 export type ToolSeat = Role | "integrator";
 
 export const TEAMS_TOOLS_FOR: Record<ToolSeat, readonly string[]> = {
-	personal: ["teams_assign", "teams_progress", "teams_ask", "teams_write_report"],
-	project: ["teams_forward", "teams_report", "teams_progress", "teams_ask", "teams_pause", "teams_write_report"],
+	personal: ["teams_assign", "teams_progress", "teams_ask", "teams_close", "teams_write_report"],
+	project: ["teams_forward", "teams_report", "teams_progress", "teams_ask", "teams_pause", "teams_close", "teams_write_report"],
 	group: [
 		"teams_forward",
 		"teams_report",
@@ -15,6 +15,7 @@ export const TEAMS_TOOLS_FOR: Record<ToolSeat, readonly string[]> = {
 		"teams_ask",
 		"teams_pause",
 		"teams_retire",
+		"teams_close",
 		"teams_write_report",
 	],
 	worker: ["teams_report", "teams_ask", "teams_queue"],

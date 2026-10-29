@@ -2,14 +2,15 @@ import type { Database } from "bun:sqlite";
 import { configStamp, loadConfig, resolveModel, type TaskDifficulty, type TaskKind, type TeamsConfig } from "./config";
 import { logEvent, teamsHome } from "./db";
 import { formatUsd, guardState, readState, recordSpend, setState, spendToday } from "./guard";
-import { type Role, sessionTag } from "./identity";
+import { projectSeat, type Role, sessionTag } from "./identity";
 import { type MailBody, type MailKind, Mailer, type MailRow } from "./mail";
 import { mergeIntoGroup } from "./merge";
 import { isManagerRole } from "./policy";
 import { ACTIVE_STATUSES, TaskQueue, type TaskRow, taskPaths, taskTitle } from "./queue";
 import { type AgentRow, type GroupRow, type RegisterInput, type RegisterResult, Registry } from "./registry";
 import { type SlotKind, type SlotRow, Slots } from "./slots";
-import { seatLaunchFiles, writeLaunchFile } from "./spawn";
+import { findRepository } from "./repos";
+import { launchTag, seatLaunchFiles, writeLaunchFile } from "./spawn";
 import { branchHead, changedFiles, commitExists, currentBranch, isAncestor } from "./worktree";
 
 export type { TaskRow };
@@ -60,6 +61,8 @@ export interface ProgressEntry {
 }
 
 export type MergeOutcome = { ok: true; summary: string } | { ok: false; error: string };
+
+export type CloseResult = { ok: true; closed: AgentRow[]; cancelled: string[] } | { ok: false; error: string };
 
 export interface PatrolResult {
 	inherited: string[];
@@ -840,6 +843,53 @@ export class TeamsRuntime {
 		this.slots.setStatus(slot.id, "retiring");
 		logEvent(this.options.db, "retire:requested", { slot: slot.id }, viewer.id, this.now());
 		return { ok: true, slot, agent: target };
+	}
+
+	close(viewer: AgentRow, ref: string): CloseResult {
+		if (!isManagerRole(viewer.role)) return { ok: false, error: `${viewer.label} is a ${viewer.role}; only leaders close members.` };
+		const target = this.closeTarget(viewer, ref.trim());
+		if (typeof target === "string") return { ok: false, error: target };
+		const members = [target, ...this.registry.subtreeOf(target.seat)];
+		const seats = [...new Set(members.map((row) => row.seat))];
+		const ids = members.map((row) => row.id);
+		const cancelled = this.options.db
+			.transaction((): TaskRow[] => {
+				const marks = (values: string[]) => values.map(() => "?").join(", ");
+				const open = this.options.db
+					.query(
+						`SELECT * FROM tasks WHERE status IN ('queued','assigned','claimed','running','blocked')
+						 AND (to_seat IN (${marks(seats)}) OR to_agent IN (${marks(ids)}) OR from_seat IN (${marks(seats)}))`,
+					)
+					.all(...seats, ...ids, ...seats) as TaskRow[];
+				const done = this.queue.cancelOpen(open);
+				for (const member of members) this.registry.markStatus(member.id, "left");
+				for (const seat of seats) {
+					const slotId = slotOfSeat(seat);
+					if (slotId) this.slots.setStatus(slotId, "retired");
+				}
+				this.mailer.discardInbox(seats);
+				logEvent(this.options.db, "close", { target: target.seat, seats, cancelled: done.map((row) => row.id) }, viewer.id, this.now());
+				return done;
+			})
+			.immediate();
+		for (const seat of seats) {
+			if (!launchTag(seat)) continue;
+			const files = seatLaunchFiles(this.home, seat);
+			writeLaunchFile(files.stop, `${this.now()}\n`);
+			if (members.some((row) => row.seat === seat && row.status === "parked")) writeLaunchFile(files.wake, "");
+		}
+		return { ok: true, closed: members, cancelled: cancelled.map((row) => row.id) };
+	}
+
+	private closeTarget(viewer: AgentRow, ref: string): AgentRow | string {
+		const resolved = this.registry.resolveRef(viewer, ref);
+		if (resolved && resolved.parent_seat === viewer.seat) return resolved;
+		const listed = this.registry.childrenOf(viewer.seat).map((row) => `${row.label} (${row.id})`).join(", ") || "none";
+		if (viewer.role !== "personal" || !ref) return `"${ref}" is not one of your direct reports: ${listed}.`;
+		const config = this.configOf(viewer);
+		const found = findRepository(ref, { registered: this.registry.allProjects(), roots: config.repos.roots, depth: config.repos.depth });
+		if (!found.ok) return `${found.error} Your direct reports: ${listed}.`;
+		return this.registry.holder(projectSeat(found.project.id)) ?? `${found.project.name} has no repo leader to close.`;
 	}
 
 	setManual(worker: AgentRow, manual: boolean): { ok: true } | { ok: false; error: string } {

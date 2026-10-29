@@ -60,7 +60,10 @@ export class Slots {
 		const id = slotIdFor(input.projectId, input.group, input.index, input.kind);
 		const existing = this.byId(id);
 		if (existing) {
-			this.db.run("UPDATE slots SET worktree = ?, branch = ? WHERE id = ?", [input.worktree, input.branch, id]);
+			this.db.run(
+				"UPDATE slots SET worktree = ?, branch = ?, status = CASE WHEN status = 'retired' THEN 'free' ELSE status END WHERE id = ?",
+				[input.worktree, input.branch, id],
+			);
 			return this.byId(id) as SlotRow;
 		}
 		this.db.run(
@@ -105,7 +108,7 @@ export class Slots {
 	}
 
 	integratorFor(projectId: string | null, group: string): SlotRow | null {
-		return this.forGroup(projectId, group, "integrator")[0] ?? null;
+		return this.forGroup(projectId, group, "integrator").find((slot) => slot.status !== "retired") ?? null;
 	}
 
 	byWorktree(path: string, kind: SlotKind = "worker"): SlotRow | null {

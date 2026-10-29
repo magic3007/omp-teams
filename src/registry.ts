@@ -288,6 +288,20 @@ export class Registry {
 			.all(seat) as AgentRow[];
 	}
 
+	subtreeOf(seat: string): AgentRow[] {
+		return this.db
+			.query(
+				`WITH RECURSIVE below(seat) AS (
+					SELECT seat FROM agents WHERE parent_seat = ? AND status IN ('alive','parked','dead')
+					UNION
+					SELECT agents.seat FROM agents JOIN below ON agents.parent_seat = below.seat
+					WHERE agents.status IN ('alive','parked','dead')
+				)
+				SELECT * FROM agents WHERE seat IN (SELECT seat FROM below) AND status IN ('alive','parked','dead')`,
+			)
+			.all(seat) as AgentRow[];
+	}
+
 	peersOf(agent: AgentRow): AgentRow[] {
 		if (agent.role !== "worker") return [];
 		return this.db

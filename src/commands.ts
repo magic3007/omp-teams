@@ -24,6 +24,7 @@ const USAGE = [
 	"/teams queue                         show this group's task list",
 	"/teams pause <group> | resume <group>   stop or resume claiming in a group",
 	"/teams retire <worker>               stop a worker after its current task (group lead)",
+	"/teams close <member|repo>           close a direct report and everyone below it now (panes close, open tasks are cancelled)",
 	"/teams accept-head <group>           accept a group branch that moved outside the integrator; merges resume",
 	"/teams takeover | release            drive this worker pane by hand / give it back",
 	"/teams tree [--all] [--text] [--paths]   the members below you with their omp session ids (--all: whole machine)",
@@ -103,6 +104,7 @@ export function registerTeamsCommands(
 				"pause",
 				"resume",
 				"retire",
+				"close",
 				"accept-head",
 				"takeover",
 				"release",
@@ -549,6 +551,22 @@ export function registerTeamsCommands(
 						return;
 					}
 					host.notify(`${result.agent?.label ?? result.slot.id} stops after its current task`, "info");
+					return;
+				}
+				case "close": {
+					const me = host.refresh();
+					const ref = positional.slice(1).join(" ");
+					if (!me || !ref) {
+						host.notify("/teams close <member|repo>", "error");
+						return;
+					}
+					const result = runtime.close(me, ref);
+					if (!result.ok) {
+						host.notify(result.error, "error");
+						return;
+					}
+					const cancelled = result.cancelled.length > 0 ? `; cancelled ${result.cancelled.join(", ")}` : "";
+					host.notify(`closed ${result.closed.map((row) => row.label).join(", ")}${cancelled}`, "info");
 					return;
 				}
 				case "accept-head": {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { aliveCount, bringUpGroup, check, createHarness, finish, lastLines, launchPersonal, queryAll, queryOne, run, waitFor } from "./harness";
+import { aliveCount, bringUpGroup, check, createHarness, finish, lastLines, launchPersonal, paneExists, queryAll, queryOne, run, submit, waitFor } from "./harness";
 
 const mode = process.env.MODE ?? "guards";
 
@@ -23,6 +23,7 @@ const config: Record<string, string[]> = {
 		"    project: 0.3",
 		"    group: 0.3",
 	],
+	close: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
 };
 
 const h = createHarness(`m3-${mode}`, config[mode] ?? config.guards ?? []);
@@ -38,6 +39,10 @@ function paneText(paneId: string, lines = 60): string {
 		stdout: "pipe",
 		stderr: "pipe",
 	}).stdout.toString();
+}
+
+function workspaceExists(workspaceId: string): boolean {
+	return Bun.spawnSync(["herdr", "workspace", "list"], { stdout: "pipe", stderr: "pipe" }).stdout.toString().includes(`"${workspaceId}"`);
 }
 
 function reportPath(): string {
@@ -81,6 +86,39 @@ async function main(): Promise<void> {
 	const workerUp = await waitFor(() => aliveCount(h, "worker") === 2, 240_000, "worker and integrator");
 	check(h, "a worker and the integrator are up", workerUp, lastLines(groupPane, 3));
 	if (!workerUp) finish(h, "M3");
+
+	if (mode === "close") {
+		const members = queryAll<{ id: string; pane_id: string | null }>(
+			h,
+			"SELECT id, pane_id FROM agents WHERE role IN ('project','group','worker') AND status = 'alive'",
+		);
+		const memberPanes = members.map((row) => row.pane_id).filter((pane): pane is string => Boolean(pane));
+		check(h, "the repo subtree has panes before closing", memberPanes.length === 4, memberPanes.join(", "));
+		const sent = await submit(h, personalPane, "关闭 repo 的 repo leader 及其下属", () =>
+			(queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM events WHERE kind = 'close'")?.n ?? 0) > 0,
+		);
+		check(h, "the request reaches the personal leader", sent, lastLines(personalPane, 4));
+		const closed = await waitFor(
+			() => (queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM events WHERE kind = 'close'")?.n ?? 0) === 1,
+			240_000,
+			"the personal leader called teams_close",
+		);
+		check(h, "one sentence makes the personal leader close the repo subtree in one call", closed, lastLines(personalPane, 6));
+		const left = queryOne<{ n: number }>(
+			h,
+			`SELECT COUNT(*) AS n FROM agents WHERE id IN (${members.map(() => "?").join(", ")}) AND status = 'left'`,
+			members.map((row) => row.id),
+		)?.n;
+		check(h, "every member below the personal leader has left", left === members.length, `${left ?? 0} of ${members.length}`);
+		const panesGone = await waitFor(() => memberPanes.every((pane) => !paneExists(pane)), 120_000, "closed panes gone");
+		check(h, "every closed member's pane is gone", panesGone, memberPanes.filter(paneExists).join(", "));
+		const workspaceGone = await waitFor(() => !workspaceExists(up.workspaceId), 60_000, "repo workspace gone");
+		check(h, "the repo workspace closes with its last pane", workspaceGone, up.workspaceId);
+		const retired = queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM slots WHERE status != 'retired'")?.n ?? -1;
+		check(h, "every slot is retired", retired === 0, `${retired} slot(s) still active`);
+		check(h, "the personal leader keeps running", aliveCount(h, "personal") === 1 && paneExists(personalPane));
+		finish(h, "M3");
+	}
 
 	if (mode === "guards") {
 		run(
