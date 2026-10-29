@@ -5,7 +5,8 @@
  * `OMP_TEAMS_SLOT` and no registration stays invisible to the team.
  */
 import { existsSync, statSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import type { TaskDifficulty, TaskKind } from "./config";
 import type { TeamsHost } from "./host";
@@ -67,6 +68,13 @@ export function parseArgs(raw: string): ParsedArgs {
 		}
 	}
 	return { positional, flags };
+}
+
+/** A path from a command line: `~` and `~/x` expand, everything else resolves. */
+export function expandPath(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+	return resolve(path);
 }
 
 function isInside(parent: string, child: string): boolean {
@@ -197,7 +205,7 @@ export function registerTeamsCommands(
 					const base = existingGroup?.base ?? git(project.root, ["symbolic-ref", "--short", "HEAD"]) ?? "HEAD";
 
 					if (typeof flags.worktree === "string") {
-						worktree = resolve(flags.worktree);
+						worktree = expandPath(flags.worktree);
 						if (!existsSync(worktree) || !statSync(worktree).isDirectory()) {
 							host.notify(`--worktree ${worktree} does not exist`, "error");
 							return;
@@ -458,7 +466,7 @@ export function registerTeamsCommands(
 						host.notify("run /teams bootstrap --yes in the personal leader's pane", "error");
 						return;
 					}
-					const repoPath = typeof flags.repo === "string" ? resolve(flags.repo) : ctx.cwd;
+					const repoPath = typeof flags.repo === "string" ? expandPath(flags.repo) : ctx.cwd;
 					const groupName = typeof flags.group === "string" ? flags.group : "main";
 					const count = typeof flags.count === "string" ? Math.max(1, Math.min(4, Number(flags.count) || 2)) : 2;
 					const project = spawnProject(deps, me, { repoPath });
