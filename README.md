@@ -43,7 +43,7 @@ a report with the merge commands.
 | `git` | 2.34.1 | worktrees, `merge --no-ff`, `merge-tree` preview |
 | OS | Linux | the acceptance suites run on Linux; herdr runs on macOS too |
 
-Model providers are whatever omp supports. Routing defaults to `deepseek/deepseek-flash`
+Model providers are whatever omp supports. Routing defaults to `minimax-test/MiniMax-3.1-Flash`
 for leaders and `deepseek/deepseek-v4-flash` for workers; change them in the config.
 
 ## Install
@@ -247,10 +247,10 @@ budget or window on its next tick.
 ```yaml
 models:
   role:
-    personal:   deepseek/deepseek-flash
-    project:    deepseek/deepseek-flash
-    group:      deepseek/deepseek-flash
-    integrator: deepseek/deepseek-flash
+    personal:   minimax-test/MiniMax-3.1-Flash
+    project:    minimax-test/MiniMax-3.1-Flash
+    group:      minimax-test/MiniMax-3.1-Flash
+    integrator: minimax-test/MiniMax-3.1-Flash
   routing:
     default: deepseek/deepseek-v4-flash
     by_kind:
@@ -258,7 +258,7 @@ models:
       docs:  deepseek/deepseek-flash
     by_difficulty:
       hard: devin/claude-opus-5-5
-  allowed: [deepseek/deepseek-flash, deepseek/deepseek-v4-flash, devin/claude-opus-5-5]
+  allowed: [minimax-test/MiniMax-3.1-Flash, minimax-test/MiniMax-M78, deepseek/deepseek-flash, deepseek/deepseek-v4-flash, devin/claude-opus-5-5]
 path_rules:
   - { glob: "docs/**", kind: docs, difficulty: trivial }
 
