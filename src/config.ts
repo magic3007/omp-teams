@@ -1,13 +1,3 @@
-/**
- * Layered configuration for omp-teams.
- *
- * Precedence, lowest to highest:
- *   1. DEFAULTS below
- *   2. `~/.omp/teams/config.yml` (personal defaults)
- *   3. `<project-root>/.omp/teams.yml` (per-project override, usually committed)
- *
- * Only plain objects merge recursively; arrays and scalars replace.
- */
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { teamsHome } from "./db";
 import { join } from "node:path";
@@ -27,7 +17,6 @@ export interface TeamsConfig {
 			by_kind: Record<string, string>;
 			by_difficulty: Record<string, string>;
 		};
-		/** Models a manager may name explicitly when assigning. */
 		allowed: string[];
 		fallback: { worker: string[] };
 	};
@@ -36,10 +25,8 @@ export interface TeamsConfig {
 		workers_per_tab: number;
 		max_workers_total: number;
 		worker_max_cost_usd: number;
-		/** A member with no heartbeat for this long is considered dead. */
 		dead_after_seconds: number;
 	};
-	/** Mailbox poll interval, also the heartbeat interval. */
 	poll_ms: number;
 	patrol_minutes: number;
 	max_task_failures: number;
@@ -48,34 +35,21 @@ export interface TeamsConfig {
 	guards: {
 		budget: {
 			daily_usd: number;
-			/**
-			 * USD per million tokens, used when a session reports no cost (many
-			 * providers ship no price table to omp). Keyed by `provider/model`,
-			 * `provider/*`, or `*`; first match wins.
-			 */
 			prices: Record<string, { input: number; output: number }>;
 		};
-		/** A group that reports this many blockers within an hour is paused and escalated. 0 disables. */
 		group_blocked_per_hour: number;
-		/** ISO time before which no new work starts (one-off). */
 		quiet_until: string | null;
-		/** Local-time window in which new work may start, `HH:MM`; null allows every hour. Wraps past midnight. */
 		window: { start: string; end: string } | null;
 	};
 	rate_limits: {
-		/** `progress --fresh` requests one subordinate may send per hour. */
 		fresh_per_hour: number;
 	};
-	/** Root for group and worker git worktrees. */
 	worktree_root: string;
 	merge: {
-		/** Shell command run in the group worktree after each merge; empty disables verification. */
 		verify_command: string;
 		verify_timeout_seconds: number;
 	};
-	/** Spawn the integrator slot with the first worker of a group. */
 	auto_integrator: boolean;
-	/** A task in running state with no report for this long is escalated to the manager. */
 	stall_minutes: number;
 }
 
@@ -131,7 +105,6 @@ export const DEFAULT_CONFIG: TeamsConfig = {
 		window: null,
 	},
 	rate_limits: { fresh_per_hour: 4 },
-	// Worktrees live beside the registry, so OMP_TEAMS_HOME relocates all state at once.
 	worktree_root: join(teamsHome(), "wt"),
 	merge: { verify_command: "", verify_timeout_seconds: 600 },
 	auto_integrator: true,
@@ -142,7 +115,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Recursively merge `override` into `base` without mutating either. */
 export function mergeConfig<T>(base: T, override: unknown): T {
 	if (!isPlainObject(override)) return base;
 	if (!isPlainObject(base)) return override as T;
@@ -154,9 +126,7 @@ export function mergeConfig<T>(base: T, override: unknown): T {
 	return out as T;
 }
 
-/** `Bun.YAML` is missing from older `@types/bun` releases, so read it through a narrowed record. */
 function bunGlobals(): Record<string, unknown> {
-	// Reason: the Bun runtime global is not present in every type environment we compile against.
 	return globalThis.Bun as unknown as Record<string, unknown>;
 }
 
@@ -181,10 +151,6 @@ export function projectConfigPath(projectRoot: string): string {
 	return join(projectRoot, ".omp", "teams.yml");
 }
 
-/**
- * Cheap fingerprint of a configuration file pair: size and mtime. Long runs must
- * notice an edited budget or window without a restart.
- */
 export function configStamp(projectRoot?: string, home?: string): string {
 	const stat = (path: string): string => {
 		try {
@@ -197,7 +163,6 @@ export function configStamp(projectRoot?: string, home?: string): string {
 	return `${stat(personalConfigPath(home))}|${projectRoot ? stat(projectConfigPath(projectRoot)) : ""}`;
 }
 
-/** Load defaults, then the personal file, then the project file. */
 export function loadConfig(projectRoot?: string, home?: string): TeamsConfig {
 	let config = mergeConfig(DEFAULT_CONFIG, readYaml(personalConfigPath(home)));
 	if (projectRoot) config = mergeConfig(config, readYaml(projectConfigPath(projectRoot)));
@@ -205,7 +170,6 @@ export function loadConfig(projectRoot?: string, home?: string): TeamsConfig {
 }
 
 export const TASK_KINDS = ["merge", "test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
-/** Kinds a manager may hand out. Merges are created by the system when a worker reports done. */
 export const ASSIGNABLE_KINDS = ["test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
 export const TASK_DIFFICULTIES = ["trivial", "simple", "normal", "hard"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
@@ -216,13 +180,6 @@ export interface ModelResolution {
 	source: "explicit" | "path_rule" | "by_kind" | "by_difficulty" | "default";
 }
 
-/**
- * Resolve the model for one assignment.
- *
- * Order: explicit `model` (must be in `allowed`) > path rule > `by_kind` >
- * `by_difficulty` > `default`. A task that resolves to nothing is rejected
- * instead of silently falling back, so bad configuration surfaces immediately.
- */
 export function resolveModel(
 	config: TeamsConfig,
 	request: { kind?: string; difficulty?: string; model?: string; paths?: string[] },
@@ -259,7 +216,6 @@ export function resolveModel(
 	};
 }
 
-/** Minimal glob matcher: `*`, `**` and `?`, anchored on the whole path. */
 export function globMatch(pattern: string, path: string): boolean {
 	const normalized = path.replace(/^\.\//, "");
 	let regex = "";

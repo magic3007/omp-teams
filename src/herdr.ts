@@ -1,11 +1,3 @@
-/**
- * Thin typed wrapper over the herdr CLI.
- *
- * Every call is one `herdr <cmd>` invocation returning `{id, result}` or
- * `{id, error}` JSON. herdr is only a presentation and launch surface here: the
- * registry stays the source of truth, and pane ids are treated as mutable
- * bindings refreshed on every attach.
- */
 import { existsSync } from "node:fs";
 
 export interface HerdrPane {
@@ -28,7 +20,6 @@ function binary(): string {
 	return "herdr";
 }
 
-/** herdr is only usable from inside a herdr pane. */
 export function herdrAvailable(): boolean {
 	return process.env.HERDR_ENV === "1" && Boolean(process.env.HERDR_SOCKET_PATH);
 }
@@ -59,7 +50,6 @@ function call<T>(args: string[], select: (result: unknown) => T | undefined): He
 	return { ok: true, value };
 }
 
-/** Commands that answer with nothing on success (`pane run`). */
 function callVoid(args: string[]): HerdrResult<true> {
 	const proc = Bun.spawnSync([binary(), ...args], { stdout: "pipe", stderr: "pipe" });
 	if (proc.exitCode !== 0) {
@@ -108,16 +98,11 @@ function readPane(value: unknown): HerdrPane | null {
 	};
 }
 
-/**
- * Fire-and-forget herdr call for presence updates: never blocks the caller's
- * event loop, so a slow herdr socket cannot starve the member's heartbeat.
- */
 function callDetached(args: string[]): void {
 	try {
 		const proc = Bun.spawn([binary(), ...args], { stdout: "ignore", stderr: "ignore" });
 		proc.unref();
 	} catch {
-		// Presence is best-effort.
 	}
 }
 
@@ -127,7 +112,6 @@ export interface HerdrCreated {
 	paneId: string;
 }
 
-/** Arguments of one `pane report-metadata` call under the omp-teams source. */
 export function metadataArgs(
 	paneId: string,
 	input: {
@@ -187,7 +171,6 @@ export class Herdr {
 		return call(["pane", "rename", paneId, label], () => true);
 	}
 
-	/** Tab and workspace renames take the label as a positional argument. */
 	renameTab(tabId: string, label: string): HerdrResult<true> {
 		return call(["tab", "rename", tabId, label], () => true);
 	}
@@ -196,13 +179,10 @@ export class Herdr {
 		return call(["workspace", "rename", workspaceId, label], () => true);
 	}
 
-	/** Type a command into a pane's shell and press Enter. */
 	runInPane(paneId: string, command: string): HerdrResult<true> {
-		// `pane run` answers with an empty body on success.
 		return callVoid(["pane", "run", paneId, command]);
 	}
 
-	/** Presence update without waiting for herdr: label, state labels, tokens. */
 	reportPresence(
 		paneId: string,
 		input: {
@@ -226,13 +206,11 @@ export class Herdr {
 		});
 	}
 
-	/** Close every pane of a workspace. Used only for workspaces this extension created. */
 	closeWorkspace(workspaceId: string): HerdrResult<true> {
 		return call(["workspace", "close", workspaceId], () => true);
 	}
 }
 
-/** This session's own pane id, when running inside herdr. */
 export function currentPaneId(): string | null {
 	const pane = process.env.HERDR_PANE_ID;
 	return pane && pane.length > 0 ? pane : null;

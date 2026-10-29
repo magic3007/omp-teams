@@ -1,17 +1,7 @@
-/**
- * Manager tool policy.
- *
- * A manager never executes work. Registering as a manager narrows the active
- * tool set to read-only inspection plus `teams_*`, and the `tool_call` guard
- * re-checks every call because plan/goal/vibe modes, MCP servers, newly
- * registered extension tools and session resume can all restore tools that
- * `setActiveTools` removed.
- */
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { Role } from "./identity";
 
-/** Tools a manager may keep: inspection for planning, nothing that mutates. */
 export const MANAGER_TOOLS: Record<string, true> = {
 	read: true,
 	grep: true,
@@ -44,11 +34,6 @@ function readOnlyBlockReason(toolName: string, input: unknown, who: string, inst
 	return null;
 }
 
-/**
- * Why this manager call must be blocked, or null when it may run.
- *
- * `lsp` is read-only except for refactors: `rename` writes workspace edits.
- */
 export function managerBlockReason(toolName: string, input: unknown): string | null {
 	return readOnlyBlockReason(
 		toolName,
@@ -58,31 +43,20 @@ export function managerBlockReason(toolName: string, input: unknown): string | n
 	);
 }
 
-/** The integrator only merges; the merge itself is the deterministic teams_merge tool. */
 export function integratorBlockReason(toolName: string, input: unknown): string | null {
 	return readOnlyBlockReason(toolName, input, "the integrator only merges", "Run the merge with teams_merge.");
 }
 
-/** Where a worker may write: its own worktree. The rest of the team's git state is off limits. */
 export interface WorkerBounds {
-	/** The worker's own worktree. */
 	worktree: string;
-	/** The worker's slot branch. */
 	branch: string;
-	/** Paths that belong to the team: the main repository and every team worktree. */
 	protectedRoots: string[];
 }
 
-/** A leading `NAME=value` word is environment for the command that follows. */
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** Shell keywords that end up in front of a command inside one segment. */
 const SHELL_PREFIX: Record<string, true> = { do: true, then: true, else: true, elif: true, "!": true };
 
-/**
- * The text of one `$(...)` substitution, kept raw so its brackets never split a
- * word and its arguments are never read as the caller's.
- */
 function substitution(command: string, start: number): [string, number] {
 	let depth = 0;
 	let index = start + 1;
@@ -101,12 +75,6 @@ function substitution(command: string, start: number): [string, number] {
 	return [command.slice(start), command.length];
 }
 
-/**
- * Split a bash command into segments of words. Unquoted `&&`, `||`, `;`, `|`,
- * `&` and newlines end a segment; quotes group words and lose the quote marks;
- * redirections (`2>/dev/null`, `>&1`, `>out`) are dropped, so they never look
- * like operands.
- */
 function tokenizeBash(command: string): string[][] {
 	const segments: string[][] = [];
 	let words: string[] = [];
@@ -176,7 +144,6 @@ function tokenizeBash(command: string): string[][] {
 			continue;
 		}
 		if (char === ">" || char === "<") {
-			// A word of digits right before the operator is a file descriptor, not an operand.
 			if (/^\d+$/.test(word)) {
 				word = "";
 				started = false;
@@ -212,7 +179,6 @@ function tokenizeBash(command: string): string[][] {
 	return segments;
 }
 
-/** The command of a segment and its arguments, skipping assignments and keywords. */
 function commandOf(words: string[]): { name: string; args: string[] } | null {
 	let index = 0;
 	while (index < words.length && (ASSIGNMENT.test(words[index] ?? "") || SHELL_PREFIX[words[index] ?? ""] === true)) index += 1;
@@ -231,7 +197,6 @@ function resolveAgainst(base: string, path: string): string {
 	return resolve(base, expandHome(path));
 }
 
-/** `--git-dir`/`--work-tree` value; a `/.git` suffix means its parent is the worktree. */
 function repositoryTarget(value: string, base: string): string {
 	const resolved = resolveAgainst(base, value);
 	return resolved.endsWith("/.git") ? resolve(resolved, "..") : resolved;
@@ -241,7 +206,6 @@ function isFlag(word: string): boolean {
 	return word.startsWith("-") && word !== "-";
 }
 
-/** An argument list split into flags and operands; `--` alone is a flag. */
 function splitArgs(args: string[]): { flags: string[]; operands: string[] } {
 	const flags: string[] = [];
 	const operands: string[] = [];
@@ -256,7 +220,6 @@ function hasLong(flags: string[], names: string[]): boolean {
 	return flags.some((flag) => flag.startsWith("--") && names.some((name) => flag === name || flag.startsWith(`${name}=`)));
 }
 
-/** A short-flag cluster such as `-qb` or `-D` contains one of these letters. */
 function hasShort(flags: string[], letters: Record<string, true>): boolean {
 	return flags.some((flag) => !flag.startsWith("--") && [...flag.slice(1)].some((letter) => letters[letter] === true));
 }
@@ -299,11 +262,6 @@ const TAG_READ_SHORT: Record<string, true> = { l: true, v: true };
 const CHECKOUT_CREATE_SHORT: Record<string, true> = { b: true, B: true };
 const SYMBOLIC_REF_WRITE_SHORT: Record<string, true> = { d: true };
 
-/**
- * Ref writes: every worktree shares them, so the directory does not matter.
- * Returns the clause that follows `workers do not`, or null when the command
- * only reads refs.
- */
 function refWriteClause(subcommand: string, args: string[]): string | null {
 	if (subcommand === "switch") return "switch branches";
 	if (subcommand === "checkout") {
@@ -340,12 +298,6 @@ function refWriteClause(subcommand: string, args: string[]): string | null {
 	return null;
 }
 
-/**
- * Git subcommands that change a worktree or its refs. Branch, worktree and ref
- * writes are covered everywhere by `refWriteClause`, so their read-only forms
- * (`git branch -a`, `git worktree list`) stay allowed here. `stash list` and
- * `stash show` only read, and names such as `merge-base` are not in the set.
- */
 const GIT_WRITE_SUBCOMMANDS: Record<string, true> = {
 	add: true,
 	am: true,
@@ -368,11 +320,6 @@ const GIT_WRITE_SUBCOMMANDS: Record<string, true> = {
 	switch: true,
 };
 
-/**
- * Why this git invocation is blocked, as the clause after `workers do not`, or
- * null when it only reads. The directory it runs in comes from `-C`,
- * `--git-dir` and `--work-tree` when given.
- */
 function gitClause(args: string[], directory: string, bounds: WorkerBounds): string | null {
 	let target = directory;
 	let index = 0;
@@ -425,17 +372,14 @@ function gitClause(args: string[], directory: string, bounds: WorkerBounds): str
 	return foreign ? `change git state outside their own worktree (${foreign})` : null;
 }
 
-/** Follow `cd`/`pushd` so later segments are judged in the directory they run in. */
 function changeDirectory(target: string | null, directory: string, bounds: WorkerBounds): string {
 	if (!target || target === "-") return homedir();
 	if (target.includes("$(") || target.includes("`")) {
-		// `cd $(git rev-parse --git-common-dir)/..` lands in the main repository.
 		return target.includes("--git-common-dir") ? (bounds.protectedRoots[0] ?? bounds.worktree) : directory;
 	}
 	return resolveAgainst(directory, target);
 }
 
-/** The first blocked segment of a bash command, as the clause after `workers do not`. */
 function bashClause(command: string, cwd: string | null, bounds: WorkerBounds): string | null {
 	let directory = resolveAgainst(bounds.worktree, cwd ?? ".");
 	for (const words of tokenizeBash(command)) {
@@ -456,7 +400,6 @@ function insideAny(path: string, roots: string[]): string | null {
 	return roots.find((root) => path === root || path.startsWith(root.endsWith("/") ? root : `${root}/`)) ?? null;
 }
 
-/** A path inside the team's protected git state but outside the worker's own worktree. */
 function foreignTeamPath(paths: string[], bounds: WorkerBounds): string | null {
 	for (const path of paths) {
 		if (insideAny(path, [bounds.worktree])) continue;
@@ -465,19 +408,6 @@ function foreignTeamPath(paths: string[], bounds: WorkerBounds): string | null {
 	return null;
 }
 
-/**
- * Why this worker call must be blocked, or null when it may run.
- *
- * A worker may read the whole repository but writes only in its own worktree.
- * The bash guard reads each segment's real command, follows `cd`/`pushd`, and
- * resolves `-C`/`--git-dir`/`--work-tree`, so where a command runs decides the
- * answer; ref writes are blocked wherever they run because every worktree
- * shares the refs. File tools resolve their paths the same way.
- *
- * This guards against honest mistakes by a model following a confused task (it
- * blocks the git commands that rewrote a group branch in testing); it is not a
- * sandbox, and the integrator's head check catches what slips through.
- */
 export function workerBlockReason(toolName: string, input: unknown, bounds: WorkerBounds | null): string | null {
 	if (toolName === "ask") {
 		return "the built-in ask tool blocks until a human answers; use teams_ask to reach your group lead instead.";
@@ -507,7 +437,6 @@ export function workerBlockReason(toolName: string, input: unknown, bounds: Work
 	return null;
 }
 
-/** Active tools a manager keeps: read-only tools it already had, plus every teams tool. */
 export function managerActiveTools(current: string[], teamsTools: string[]): string[] {
 	const kept = current.filter((name) => MANAGER_TOOLS[name] || isTeamsTool(name));
 	const missing = teamsTools.filter((name) => !kept.includes(name));

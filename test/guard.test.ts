@@ -47,7 +47,6 @@ describe("guards", () => {
 		const now = new Date("2026-10-29T10:00:00").getTime();
 		recordSpend(db, { sessionId: "s-1", agentId: "a-1", seat: "worker:s-1", model: "m", cost: 1.5, at: now });
 		recordSpend(db, { sessionId: "s-2", agentId: "a-2", seat: "worker:s-2", model: "m", cost: 0.5, at: now });
-		// Yesterday does not count.
 		recordSpend(db, { sessionId: "s-3", agentId: "a-3", seat: "worker:s-3", model: "m", cost: 9, at: now - 24 * 60 * 60_000 });
 		expect(spendToday(db, now)).toBeCloseTo(2, 5);
 

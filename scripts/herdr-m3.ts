@@ -1,13 +1,3 @@
-/**
- * M3 acceptance: the brakes, the report, the halt, and bootstrap.
- *
- * Three modes, because the guards are machine-wide and would interfere:
- *   MODE=guards   (default) a group that keeps producing blockers is paused
- *   MODE=budget   a one-tenth-cent budget freezes the team, and halt/resume work
- *   MODE=bootstrap `/teams bootstrap --yes` builds all three levels in one step
- *
- * Run from inside herdr: `MODE=budget bun scripts/herdr-m3.ts`.
- */
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliveCount, bringUpGroup, check, createHarness, finish, lastLines, launchPersonal, queryAll, queryOne, run, waitFor } from "./harness";
@@ -16,8 +6,6 @@ const mode = process.env.MODE ?? "guards";
 
 const config: Record<string, string[]> = {
 	guards: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  group_blocked_per_hour: 1", "  budget:", "    daily_usd: 200"],
-	// The team is built with a workable budget, then the budget is lowered while it runs:
-	// spawning needs one, and the brake must reach a running team without a restart.
 	budget: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  group_blocked_per_hour: 0", "  budget:", "    daily_usd: 200"],
 	bootstrap: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
 	rebuild: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
@@ -105,7 +93,6 @@ async function main(): Promise<void> {
 	}
 
 	if (mode === "budget") {
-		// Lower the budget under the team's feet; running members pick the change up on their next tick.
 		writeFileSync(join(h.teamsHome, "config.yml"), "poll_ms: 700\npatrol_minutes: 0.2\nlimits:\n  dead_after_seconds: 20\nguards:\n  group_blocked_per_hour: 0\n  budget:\n    daily_usd: 0.001\n");
 		run(h, groupPane, "/teams assign queue docs trivial Write one line into note.txt, commit it, report done with the sha.");
 		const frozen = await waitFor(
@@ -152,7 +139,6 @@ async function main(): Promise<void> {
 	}
 
 	if (mode === "rebuild") {
-		// Simulate a herdr restart: the worker's pane goes away, the registry still knows the seat.
 		const slot = queryOne<{ id: string; pane_id: string | null }>(h, "SELECT id, pane_id FROM slots WHERE kind = 'worker' ORDER BY index_no LIMIT 1");
 		const before = queryOne<{ session_id: string }>(h, "SELECT session_id FROM agents WHERE seat = ? AND status = 'alive'", [`worker:${slot?.id ?? "-"}`]);
 		if (!slot?.pane_id || !before) {
@@ -196,7 +182,6 @@ async function main(): Promise<void> {
 		const freshEvents = queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM events WHERE kind = 'fresh'")?.n ?? 0;
 		check(h, "the fresh request is rate limited to one per hour", freshEvents === 1, `${freshEvents} request(s) went out`);
 
-		// The manager tool that writes the report file.
 		const path = reportPath();
 		if (existsSync(path)) rmSync(path);
 		run(h, projectPane, "call the teams_write_report tool once, then report done with its path");
@@ -204,7 +189,6 @@ async function main(): Promise<void> {
 		check(h, "the `teams_write_report` tool writes the report", written, path);
 	}
 
-	// The report works in every mode.
 	run(h, personalPane, "/teams digest");
 	const written = await waitFor(() => existsSync(reportPath()), 60_000, "digest file written");
 	const text = written ? readFileSync(reportPath(), "utf8") : "";

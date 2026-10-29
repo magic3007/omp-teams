@@ -1,17 +1,3 @@
-/**
- * M2 acceptance harness: the work loop inside real herdr panes.
- *
- * What it proves, with real omp processes:
- *   - the integrator is spawned with the first worker, beside the group lead
- *   - a paused group does not hand out queued work; resuming does
- *   - queued tasks are claimed by free workers, committed, reported with real
- *     SHAs, and merged into the group branch by the integrator
- *   - a crashed worker process is restarted by its launcher and the new session
- *     takes the same seat (same slot, same pane)
- *   - a retired worker stops after its task and its launcher does not restart it
- *
- * Run from inside herdr: `bun run test:herdr:m2`.
- */
 import {
 	aliveCount,
 	bringUpGroup,
@@ -86,7 +72,6 @@ async function main(): Promise<void> {
 		finish(h, "M2");
 	}
 
-	// 1. Workers + integrator.
 	run(h, groupPane, "/teams spawn worker --count 2");
 	const membersUp = await waitFor(() => aliveCount(h, "worker") === 3, 240_000, "two workers and the integrator");
 	check(h, "`/teams spawn worker --count 2` brings up two workers and the integrator", membersUp, lastLines(groupPane, 3));
@@ -111,7 +96,6 @@ async function main(): Promise<void> {
 		panes(h).some((pane) => pane.workspace_id === workspaceId && pane.display_agent === INTEGRATOR_LABEL),
 	);
 
-	// 2. Pause holds queued work.
 	run(h, groupPane, "/teams pause feat-x");
 	await waitFor(() => (queryOne<{ paused: number }>(h, "SELECT paused FROM groups WHERE name = 'feat-x'")?.paused ?? 0) === 1, 20_000, "group paused");
 	run(
@@ -130,7 +114,6 @@ async function main(): Promise<void> {
 		"/teams assign queue feature simple Create a file named beta.txt whose only content is the word beta, commit it, then report done with the commit sha.",
 	);
 
-	// 3. Claim → commit → done → merge.
 	const claimedByBoth = await waitFor(
 		() => new Set(queryAll<{ slot_id: string }>(h, "SELECT slot_id FROM tasks WHERE kind = 'feature' AND slot_id IS NOT NULL").map((row) => row.slot_id)).size === 2,
 		60_000,
@@ -166,7 +149,6 @@ async function main(): Promise<void> {
 	const headLog = sh(group.worktree, ["git", "log", "--oneline", "-5", group.branch]);
 	check(h, "the group branch has teams merge commits", headLog.includes("teams: merge"), headLog.replace(/\n/g, " | "));
 
-	// 4. A crashed worker is restarted by its launcher into the same seat.
 	const w1 = slots().find((slot) => slot.kind === "worker" && slot.index_no === 1);
 	const before = w1 ? queryOne<{ id: string; session_id: string }>(h, "SELECT id, session_id FROM agents WHERE seat = ? AND status = 'alive'", [`worker:${w1.id}`]) : null;
 	const pid = w1?.pane_id ? ompPid(w1.pane_id) : null;
@@ -192,9 +174,7 @@ async function main(): Promise<void> {
 		check(h, "the takeover is recorded as a same-pane restart", takeover?.detail.includes("same-pane") ?? false, takeover?.detail ?? "none");
 	}
 
-	// 5. A retired worker stops and stays stopped.
 	const w2 = slots().find((slot) => slot.kind === "worker" && slot.index_no === 2);
-	// Labels contain spaces; the seat is a single-token reference.
 	run(h, groupPane, `/teams retire worker:${w2?.id ?? "-"}`);
 	const retired = await waitFor(
 		() => queryOne<{ status: string }>(h, "SELECT status FROM slots WHERE id = ?", [w2?.id ?? ""])?.status === "retired",
@@ -221,7 +201,6 @@ async function main(): Promise<void> {
 		!retiredRestarted,
 		workerRows.map((row) => `${row.label}:${row.status}:${Math.round((Date.now() - row.last_seen) / 1000)}s`).join(" "),
 	);
-	// The group lead may legitimately retire an idle w1 on its own; the integrator can never be retired.
 	const integratorAlive = workerRows.some((row) => row.label === INTEGRATOR_LABEL && row.status === "alive");
 	const w1Alive = workerRows.some((row) => row.seat === `worker:${w1?.id ?? ""}` && row.status === "alive");
 	const w1RetiredByLead =

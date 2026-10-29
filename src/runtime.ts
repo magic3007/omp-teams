@@ -1,10 +1,3 @@
-/**
- * Team operations that do not depend on the omp UI layer.
- *
- * Everything here is driven by the SQLite registry, mailbox and task queue, so
- * it can be unit-tested without a model, a pane manager or the extension
- * runtime. The extension calls these from tools, commands and its poll loop.
- */
 import type { Database } from "bun:sqlite";
 import { configStamp, loadConfig, resolveModel, type TaskDifficulty, type TaskKind, type TeamsConfig } from "./config";
 import { logEvent, teamsHome } from "./db";
@@ -33,20 +26,13 @@ export interface RegisterExtras {
 }
 
 export interface AssignRequest {
-	/** Direct subordinate. A group lead may omit it to put the task on the group queue. */
 	to?: string;
 	task: string;
 	kind: TaskKind;
 	difficulty: TaskDifficulty;
 	paths?: string[];
 	model?: string;
-	/**
-	 * Refuse unless the manager holds an open task from its own manager. Set for
-	 * model-driven assignment by project and group leads, so their work always
-	 * traces back to a request and stops once that request is closed.
-	 */
 	requireOpenTask?: boolean;
-	/** The held task this work serves. Required with `requireOpenTask` when the manager holds more than one. */
 	parentTask?: string;
 }
 
@@ -67,9 +53,7 @@ export type ReportResult =
 
 export interface ProgressEntry {
 	agent: AgentRow;
-	/** Short omp session id, unique among live members; `omp -r <session>` resumes it. */
 	session: string;
-	/** The task the subordinate holds right now, if any. */
 	current: TaskRow | null;
 	lastReport: { status: string; summary: string; at: number; taskId?: string } | null;
 }
@@ -83,24 +67,15 @@ export interface PatrolResult {
 	escalated: string[];
 	stalled: string[];
 	unpinned: string[];
-	/** Brakes that tripped in this tick (budget, per-group blocked rate). */
 	guards: string[];
-	/** The manager closed the task it had received because all its own work finished. */
 	drained: boolean;
 }
 
-/** Refusal shown to a lead that tries to start work nobody asked for. */
 export const NO_OPEN_TASK =
 	"you have no open task from your manager, so there is nothing to delegate. Report what you have with teams_report and wait for the next task.";
 
-/**
- * How long a task's work must stay finished before the task closes by itself.
- * A lead with a sequential plan queues the next step after the previous merge
- * report wakes it; closing sooner would cut the plan short.
- */
 export const CLOSE_GRACE_MS = 120_000;
 
-/** The slot id behind a worker seat (`worker:<slot>`), or null for managers. */
 export function slotOfSeat(seat: string): string | null {
 	return seat.startsWith("worker:") ? seat.slice("worker:".length) : null;
 }
@@ -112,9 +87,7 @@ export class TeamsRuntime {
 	readonly queue: TaskQueue;
 	private readonly configs = new Map<string, { config: TeamsConfig; stamp: string }>();
 
-	/** Directory that holds the database, worktrees, reports and exports. */
 	readonly home: string;
-	/** The shared registry database. */
 	readonly db: Database;
 
 	constructor(private readonly options: RuntimeOptions) {
@@ -138,39 +111,29 @@ export class TeamsRuntime {
 		const key = projectRoot ?? "";
 		const stamp = configStamp(projectRoot, this.options.home);
 		const cached = this.configs.get(key);
-		// Re-read when a configuration file changed: a budget or window edit must apply to a running team.
 		if (cached && cached.stamp === stamp) return cached.config;
 		const config = loadConfig(projectRoot, this.options.home);
 		this.configs.set(key, { config, stamp });
 		return config;
 	}
 
-	/** Drop cached configuration, after a config file changed. */
 	invalidateConfig(): void {
 		this.configs.clear();
 	}
 
-	/** Configuration for a member's project. */
 	configOf(agent: AgentRow): TeamsConfig {
 		return this.configFor(this.registry.projectRoot(agent.project_id ?? "") ?? undefined);
 	}
 
-	/** Current brake state, from the shared database and `agent`'s configuration. */
 	guard(agent: AgentRow | null): import("./guard").GuardState {
 		const config = agent ? this.configOf(agent) : this.configFor(undefined);
 		return guardState(this.options.db, config, this.now());
 	}
 
-	/** Today's team spend, in USD. */
 	spendToday(): number {
 		return spendToday(this.options.db, this.now());
 	}
 
-	/**
-	 * Record a member's session spend. A session reports its own cost; when the
-	 * provider gives no prices, the reported tokens are priced with the
-	 * configured table so the budget keeps working.
-	 */
 	recordUsage(
 		agent: AgentRow,
 		cost: number,
@@ -189,10 +152,6 @@ export class TeamsRuntime {
 		});
 	}
 
-	/**
-	 * Stop the whole team: no new work starts anywhere until `/teams resume`.
-	 * Groups paused by a brake are marked with its reason; a human pause stays.
-	 */
 	halt(viewer: AgentRow, reason: string): { ok: true; paused: number } {
 		setState(this.options.db, "halted", reason, this.now());
 		let paused = 0;
@@ -206,10 +165,6 @@ export class TeamsRuntime {
 		return { ok: true, paused };
 	}
 
-	/**
-	 * Lift the halt and any brake pause. A human pause (`paused_reason` null) stays
-	 * as it was; a spent budget keeps the team frozen until the limit or the day changes.
-	 */
 	resume(viewer: AgentRow): { ok: true; resumed: number; frozen: boolean; spendToday: number } {
 		setState(this.options.db, "halted", null, this.now());
 		let resumed = 0;
@@ -231,11 +186,6 @@ export class TeamsRuntime {
 		return { ok: true, resumed, frozen: state.frozen, spendToday: state.spendToday };
 	}
 
-	/**
-	 * Ask each direct subordinate for a fresh status. The subordinate's extension
-	 * runs one ephemeral turn and reports back; the request is rate-limited so a
-	 * manager cannot keep interrupting its workers.
-	 */
 	requestFreshStatus(viewer: AgentRow): { ok: true; asked: string[] } | { ok: false; error: string } {
 		const config = this.configOf(viewer);
 		const limit = config.rate_limits.fresh_per_hour;
@@ -266,12 +216,10 @@ export class TeamsRuntime {
 		return { ok: true, asked: children.map((row) => row.label) };
 	}
 
-	/** Why this member may not start new work right now, or null. */
 	stopReason(agent: AgentRow): string | null {
 		return this.guard(agent).stopReason;
 	}
 
-	/** Tell every live member something, as a wake notice. */
 	private broadcastNotice(viewer: AgentRow, text: string, detail: string): void {
 		for (const member of this.registry.allAlive()) {
 			if (member.id === viewer.id) continue;
@@ -323,12 +271,6 @@ export class TeamsRuntime {
 		return result;
 	}
 
-	/**
-	 * Slot for a worker joining from `input.cwd`.
-	 *
-	 * An explicit slot id wins; otherwise the slot already bound to this worktree is
-	 * reused, and a new one is created for the next free index in the group.
-	 */
 	ensureWorkerSlot(input: RegisterInput, kind: SlotKind = "worker"): SlotRow {
 		if (input.slotId) {
 			const existing = this.slots.byId(input.slotId);
@@ -354,13 +296,11 @@ export class TeamsRuntime {
 		this.registry.markStatus(agent.id, "left");
 	}
 
-	/** The slot this worker sits in. */
 	slotOf(agent: AgentRow): SlotRow | null {
 		const slotId = slotOfSeat(agent.seat);
 		return slotId ? this.slots.byId(slotId) : null;
 	}
 
-	/** Worktree this member works in: its slot's worktree for a worker, else its cwd. */
 	worktreeFor(agent: AgentRow): string {
 		return this.slotOf(agent)?.worktree ?? agent.cwd;
 	}
@@ -370,7 +310,6 @@ export class TeamsRuntime {
 		return this.registry.group(agent.project_id, agent.group_name);
 	}
 
-	/** Assign one task: to a direct subordinate, or onto the group queue. Cross-level assignment is refused. */
 	assign(viewer: AgentRow, request: AssignRequest): AssignResult {
 		if (!isManagerRole(viewer.role)) {
 			return { ok: false, error: `${viewer.label} is a ${viewer.role}; only managers assign tasks.` };
@@ -415,11 +354,9 @@ export class TeamsRuntime {
 			return { ok: false, error: "`to` is required: only a group lead can put work on a queue." };
 		}
 
-		// The task this work serves. A blocked task is still the manager's: an answer to its blocker lets it delegate again.
 		const held = viewer.role === "personal" ? [] : this.queue.heldAll(viewer.id, viewer.seat);
 		const list = held.map((task) => `${task.id} (${task.title.slice(0, 60)})`).join(", ");
 		let received: TaskRow | null = null;
-		// The personal leader has no manager, so it holds nothing to name.
 		if (request.parentTask?.trim() && viewer.role !== "personal") {
 			received = held.find((task) => task.id === request.parentTask?.trim()) ?? null;
 			if (!received) {
@@ -437,7 +374,6 @@ export class TeamsRuntime {
 			return { ok: false, error: NO_OPEN_TASK };
 		}
 
-		// Only workers execute, so only their tasks are routed to a model; a lead keeps the leader model.
 		let model: string | null = null;
 		if (!target || target.role === "worker") {
 			const resolved = resolveModel(this.configOf(viewer), {
@@ -450,7 +386,6 @@ export class TeamsRuntime {
 			model = resolved.model;
 		}
 		if (received?.status === "blocked") this.queue.resume(received.id);
-		// Delegating is activity on the parent: it must not look stalled to the manager above.
 		if (received) this.queue.touch(received.id);
 
 		const task = this.queue.create({
@@ -499,15 +434,9 @@ export class TeamsRuntime {
 		});
 	}
 
-	/**
-	 * Claim the next queued task for an idle worker and put it in its mailbox.
-	 * Returns null when the group is paused, the slot is not available, or the
-	 * queue is empty.
-	 */
 	claimNext(worker: AgentRow): TaskRow | null {
 		if (worker.role !== "worker") return null;
 		const slot = this.slotOf(worker);
-		// A brake stops new work; the integrator still merges what is already finished.
 		if (slot?.kind !== "integrator" && this.stopReason(worker)) return null;
 		if (!slot || slot.manual === 1 || slot.status !== "occupied") return null;
 		const group = this.groupOf(worker);
@@ -524,15 +453,10 @@ export class TeamsRuntime {
 		return task;
 	}
 
-	/** Task mail reached the member's transcript: the task is now running. */
 	taskDelivered(taskId: string, worker: AgentRow): void {
 		this.queue.markRunning(taskId, { agentId: worker.id, slotId: slotOfSeat(worker.seat) });
 	}
 
-	/**
-	 * A new holder of a seat picks up the tasks its predecessor owned, so a crash or
-	 * a rotation never strands work. Each inherited task is mailed again.
-	 */
 	inheritOpenTasks(agent: AgentRow): TaskRow[] {
 		const inherited = this.queue.heldByPredecessor(agent.seat, agent.id);
 		for (const task of inherited) {
@@ -561,7 +485,6 @@ export class TeamsRuntime {
 			if (!commitExists(dir, request.sha)) {
 				return { ok: false, error: `sha ${request.sha} is not a commit in ${dir}; commit your work first, then report the SHA` };
 			}
-			// Every worktree shares one object store; a worker's SHA must be in its own history.
 			if (this.slotOf(viewer)?.kind === "worker" && !isAncestor(dir, request.sha, "HEAD")) {
 				return { ok: false, error: `sha ${request.sha} is not on your branch in ${dir}; report the SHA of your own commit (git rev-parse HEAD).` };
 			}
@@ -578,9 +501,7 @@ export class TeamsRuntime {
 			if (task.status === "cancelled") {
 				return { ok: false, error: `task ${request.taskId} was closed upstream; stop working on it and do not report on it.` };
 			}
-			// A task that is already closed (for example by the automatic close) only passes the report on.
 			if (task.status !== "done") followUp = this.applyReport(viewer, task, request);
-			// A leader's done report carries what the system itself sees: no one needs to commission a check.
 			if (request.status === "done" && (viewer.role === "group" || viewer.role === "project")) {
 				const work = this.queue.descendants(task.id).filter((row) => row.status !== "failed" && row.status !== "cancelled");
 				evidence = this.deliveredGroups(viewer, task, work).map((group) => this.groupEvidence(group));
@@ -606,12 +527,10 @@ export class TeamsRuntime {
 		return { ok: true, msgId, to: parent, followUp };
 	}
 
-	/** Move the task through its state machine; returns a note for the manager when something follows. */
 	private applyReport(viewer: AgentRow, task: TaskRow, request: ReportRequest): string | undefined {
 		const config = this.configOf(viewer);
 		switch (request.status) {
 			case "progress":
-				// A progress report proves the owner is alive; it resets the stall clock and continues a blocked task.
 				this.queue.touch(task.id);
 				this.queue.resume(task.id);
 				return undefined;
@@ -630,7 +549,6 @@ export class TeamsRuntime {
 				const slot = this.slotOf(viewer);
 				if (slot) this.slots.incrementDone(slot.id);
 				const note = cancelled > 0 ? `${cancelled} open task(s) under ${task.id} were cancelled.` : undefined;
-				// Only a worker's own commit is merged; a manager's done (group branch head) is a deliverable, not a merge.
 				if (!request.sha || task.kind === "merge" || viewer.role !== "worker" || slot?.kind !== "worker") return note;
 				const merge = this.enqueueMerge(viewer, task, request.sha);
 				if (merge) return `merge ${merge.id} queued for the integrator.`;
@@ -643,11 +561,6 @@ export class TeamsRuntime {
 		}
 	}
 
-	/**
-	 * "Done" means done: once a task is closed, the work still open under it is
-	 * moot. Cancel it and tell whoever holds it, so no lead keeps polishing a
-	 * request its manager already accepted.
-	 */
 	private cancelOpenDescendants(task: TaskRow, closer: AgentRow): number {
 		const cancelled = this.queue.cancelOpen(this.queue.descendants(task.id));
 		for (const row of cancelled) {
@@ -671,12 +584,10 @@ export class TeamsRuntime {
 		return cancelled.length;
 	}
 
-	/** Queue a merge of a finished worker commit when the group has an integrator. */
 	private enqueueMerge(worker: AgentRow, task: TaskRow, sha: string): TaskRow | null {
 		if (!task.project_id || !task.group_name) return null;
 		const integrator = this.slots.integratorFor(task.project_id, task.group_name);
 		if (!integrator) return null;
-		// A commit the group branch already contains (a verification task reporting the head) needs no merge.
 		const group = this.registry.group(task.project_id, task.group_name);
 		if (group && isAncestor(group.worktree, sha, "HEAD")) return null;
 		const groupSeat = worker.parent_seat;
@@ -706,11 +617,6 @@ export class TeamsRuntime {
 		return merge;
 	}
 
-	/**
-	 * Run one merge task (integrator only). The git work is deterministic; a
-	 * conflict or failed verification goes back to the worker that wrote the
-	 * commit as a pinned follow-up task.
-	 */
 	merge(integrator: AgentRow, taskId: string): MergeOutcome {
 		const slot = this.slotOf(integrator);
 		if (!slot || slot.kind !== "integrator") {
@@ -732,7 +638,6 @@ export class TeamsRuntime {
 		const sourceSlot = task.source_slot ? this.slots.byId(task.source_slot) : null;
 		const sourceLabel = sourceSlot ? `worker ${sourceSlot.index_no} · ${sourceSlot.group_name ?? ""}` : "a worker";
 
-		// The group branch only moves through this tool. Any other head means it was rewritten.
 		const actualHead = branchHead(group.worktree);
 		if (group.head_sha && actualHead && actualHead !== group.head_sha) {
 			this.queue.block(task.id);
@@ -837,7 +742,6 @@ export class TeamsRuntime {
 		return this.queue.byId(taskId);
 	}
 
-	/** Direct subordinates with their most recent report. Reads the registry only. */
 	progress(viewer: AgentRow): ProgressEntry[] {
 		const reports = this.mailer.recentReports(viewer.seat);
 		const pool = this.sessionPool();
@@ -852,19 +756,16 @@ export class TeamsRuntime {
 		});
 	}
 
-	/** Session ids of every live member: the pool that keeps short session tags unique. */
 	sessionPool(): string[] {
 		return this.registry.allAlive().map((row) => row.session_id);
 	}
 
-	/** Pause or resume work hand-out for a group. The group lead or any manager above it may do this. */
 	pause(viewer: AgentRow, groupName: string, paused: boolean): { ok: true } | { ok: false; error: string } {
 		const allowed =
 			(viewer.role === "personal" && viewer.project_id === null) ||
 			(viewer.role === "project" && viewer.project_id !== null) ||
 			(viewer.role === "group" && viewer.group_name === groupName);
 		if (!allowed) return { ok: false, error: `${viewer.label} cannot pause group ${groupName}.` };
-		// The personal leader spans every repository, so its group name must be unambiguous.
 		const found = viewer.project_id ? null : this.registry.groupByName(groupName);
 		if (viewer.project_id === null && !found) return { ok: false, error: `group ${groupName} is not registered.` };
 		if (found?.ambiguous) return { ok: false, error: `several projects have a group named ${groupName}; ask that project's lead instead.` };
@@ -876,7 +777,6 @@ export class TeamsRuntime {
 		return { ok: true };
 	}
 
-	/** Ask a worker to leave after its current task. Only its group lead may do this. */
 	retire(viewer: AgentRow, ref: string): { ok: true; slot: SlotRow; agent: AgentRow | null } | { ok: false; error: string } {
 		if (viewer.role !== "group") return { ok: false, error: "only a group lead retires workers." };
 		const target = this.registry.resolveRef(viewer, ref);
@@ -893,7 +793,6 @@ export class TeamsRuntime {
 		return { ok: true, slot, agent: target };
 	}
 
-	/** A human drives the worker pane: stop claiming and stop injecting mail, or give control back. */
 	setManual(worker: AgentRow, manual: boolean): { ok: true } | { ok: false; error: string } {
 		const slot = this.slotOf(worker);
 		if (!slot) return { ok: false, error: "takeover applies to workers only." };
@@ -902,11 +801,6 @@ export class TeamsRuntime {
 		return { ok: true };
 	}
 
-	/**
-	 * Patrol what this manager issued: re-home tasks of dead owners, requeue or
-	 * block failures, escalate blocked and stalled work, release pins on retired
-	 * slots, and close the manager's own task once all its work is done.
-	 */
 	patrol(manager: AgentRow): PatrolResult {
 		const result: PatrolResult = {
 			inherited: [],
@@ -936,7 +830,6 @@ export class TeamsRuntime {
 						if (fresh) this.sendTaskMail(fresh, manager.id, manager.seat, holder.seat, holder.id);
 						result.inherited.push(task.id);
 					} else if (task.status === "assigned" && task.to_seat) {
-						// Directly addressed to a seat nobody holds right now: wait for the next holder.
 						this.queue.reassignToSeat(task.id, task.attempts);
 					} else {
 						const outcome = this.queue.fail(task.id, config.max_task_failures);
@@ -991,12 +884,6 @@ export class TeamsRuntime {
 		return result;
 	}
 
-	/**
-	 * Budget brake: once today's spend reaches the limit, every group is paused
-	 * with reason `budget` (assign and spawn refuse anyway); a new day or a higher
-	 * limit lifts it. Runs on every manager's patrol, so whichever member ticks
-	 * first applies it for everyone.
-	 */
 	private applyBudgetBrake(manager: AgentRow, config: TeamsConfig): void {
 		const state = this.guard(manager);
 		if (state.frozen) {
@@ -1020,7 +907,6 @@ export class TeamsRuntime {
 			}
 			return;
 		}
-		// Spend dropped under the limit (new day, higher limit): release brake pauses.
 		for (const group of this.registry.allGroups()) {
 			if (group.paused === 1 && group.paused_reason === "budget") {
 				this.registry.setGroupPaused(group.project_id, group.name, false);
@@ -1029,11 +915,6 @@ export class TeamsRuntime {
 		}
 	}
 
-	/**
-	 * A group that produces `guards.group_blocked_per_hour` blockers within an
-	 * hour is paused and escalated: a group that keeps getting stuck needs a
-	 * human, not more of the same work.
-	 */
 	private blockedRateGuard(manager: AgentRow, config: TeamsConfig): boolean {
 		const limit = config.guards.group_blocked_per_hour;
 		if (limit <= 0 || !manager.project_id || !manager.group_name) return false;
@@ -1056,25 +937,16 @@ export class TeamsRuntime {
 		return true;
 	}
 
-	/**
-	 * Close every task the manager holds whose work is all done: the children
-	 * created for it, their merges and reworks. Like any leader's done report,
-	 * the closing report carries the delivered branches, their heads and the
-	 * files they change against their base (see {@link report}).
-	 */
 	private closeIfDrained(manager: AgentRow): boolean {
 		if (!manager.parent_seat) return false;
 		let closed = false;
-		// Oldest first, so reports arrive in the order the tasks were given.
 		const active = this.queue
 			.heldAll(manager.id, manager.seat)
 			.filter((task) => ACTIVE_STATUSES.includes(task.status))
 			.reverse();
 		for (const received of active) {
-			// A merge that conflicted is closed as failed; its rework task carries the work on.
 			const work = this.queue.descendants(received.id).filter((task) => task.status !== "failed" && task.status !== "cancelled");
 			if (work.length === 0 || work.some((task) => task.status !== "done")) continue;
-			// Give the manager time to queue the next step of a sequential plan before its task closes.
 			if (this.now() - Math.max(...work.map((task) => task.updated_at)) < CLOSE_GRACE_MS) continue;
 			const head = manager.role === "group" ? branchHead(this.groupOf(manager)?.worktree ?? this.worktreeFor(manager)) : null;
 			const reported = this.report(manager, {
@@ -1088,7 +960,6 @@ export class TeamsRuntime {
 		return closed;
 	}
 
-	/** Group branches a closed task delivered: a group leader's own, or the groups a repo leader's children went to. */
 	private deliveredGroups(manager: AgentRow, received: TaskRow, work: TaskRow[]): GroupRow[] {
 		if (manager.role === "group") {
 			const own = this.groupOf(manager);
@@ -1104,7 +975,6 @@ export class TeamsRuntime {
 		return [...names].map((name) => this.registry.group(projectId, name)).filter((group): group is GroupRow => group !== null);
 	}
 
-	/** One group branch as evidence: its head and the files it changes against its base. */
 	private groupEvidence(group: GroupRow): string {
 		const head = branchHead(group.worktree);
 		const base = group.base ?? "main";
@@ -1115,11 +985,9 @@ export class TeamsRuntime {
 				: files.length === 0
 					? "none"
 					: `${files.slice(0, 20).join(", ")}${files.length > 20 ? ` … ${files.length - 20} more` : ""}`;
-		// The full SHA: a manager above should not need to ask for it.
 		return `- ${group.branch} at ${head ?? "?"}; changes against ${base}: ${listed}`;
 	}
 
-	/** A human accepts the group branch as it is now (after a rewrite was detected). */
 	acceptHead(viewer: AgentRow, groupName: string): { ok: true; head: string } | { ok: false; error: string } {
 		if (!(viewer.role === "project" || viewer.role === "personal" || (viewer.role === "group" && viewer.group_name === groupName))) {
 			return { ok: false, error: `${viewer.label} cannot accept the head of group ${groupName}.` };
@@ -1140,7 +1008,6 @@ export class TeamsRuntime {
 		return { ok: true, head };
 	}
 
-	/** Cheap counters for the status line: members in scope, task states, unread mail. */
 	counts(agent: AgentRow): {
 		projects: number;
 		groups: number;
@@ -1174,7 +1041,6 @@ export class TeamsRuntime {
 		const unread = this.options.db
 			.query("SELECT COUNT(*) AS n FROM messages WHERE to_seat = ? AND delivered_at IS NULL")
 			.get(agent.seat) as { n: number };
-		// The integrator sits in a worker seat but does not take work; it is not counted as a worker.
 		const integratorSlots = new Set(
 			(this.options.db.query("SELECT id FROM slots WHERE kind = 'integrator'").all() as { id: string }[]).map((row) => row.id),
 		);
@@ -1190,17 +1056,14 @@ export class TeamsRuntime {
 		};
 	}
 
-	/** The task this member is working on, if any. */
 	currentTask(agent: AgentRow): TaskRow | null {
 		return this.queue.current(agent.id, agent.seat);
 	}
 
-	/** The task this member holds, including one it reported blocked and may continue. */
 	heldTask(agent: AgentRow): TaskRow | null {
 		return this.queue.held(agent.id, agent.seat);
 	}
 
-	/** Text form of a group's queue, for `/teams queue`. */
 	queueText(agent: AgentRow): string {
 		const tasks = this.queue.list({ projectId: agent.project_id, group: agent.group_name });
 		if (tasks.length === 0) return "queue is empty";
@@ -1213,7 +1076,6 @@ export class TeamsRuntime {
 			.join("\n");
 	}
 
-	/** Undelivered mail for `agent`, oldest first. */
 	takeInbox(agent: AgentRow, limit = 50): MailRow[] {
 		return this.mailer.inbox(agent.seat, limit);
 	}
@@ -1230,7 +1092,6 @@ export class TeamsRuntime {
 	}
 }
 
-/** Role default model: workers route through the task routing default. */
 function defaultModelForRole(config: TeamsConfig, role: Role): string {
 	if (role === "worker") return config.models.routing.default;
 	return config.models.role[role];

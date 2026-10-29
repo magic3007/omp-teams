@@ -1,23 +1,8 @@
-/**
- * Group task queue.
- *
- * A group lead enqueues work; idle workers claim it. Claiming is one
- * `UPDATE … WHERE status = 'queued' … RETURNING` statement, so two workers can
- * never take the same task even when they race.
- *
- * Status machine:
- *   queued -> claimed -> running -> done
- *   assigned (direct) -> running -> done
- *   running -> failed -> queued (retry) | blocked (after max failures)
- *   running -> blocked (worker needs a decision)
- *   any open state -> cancelled (an ancestor task was closed)
- */
 import type { Database } from "bun:sqlite";
 import { shortId } from "./identity";
 
 export type TaskStatus = "queued" | "assigned" | "claimed" | "running" | "done" | "failed" | "blocked" | "cancelled";
 
-/** Statuses that mean someone currently owns the task. */
 export const ACTIVE_STATUSES: TaskStatus[] = ["assigned", "claimed", "running"];
 
 export interface TaskRow {
@@ -25,10 +10,8 @@ export interface TaskRow {
 	project_id: string | null;
 	group_name: string | null;
 	from_agent: string;
-	/** Seat that issued the task; that seat's holder patrols it. */
 	from_seat: string | null;
 	to_agent: string | null;
-	/** Seat that owns the task; survives the owner's session being replaced. */
 	to_seat: string | null;
 	title: string;
 	body: string;
@@ -46,7 +29,6 @@ export interface TaskRow {
 	source_sha: string | null;
 	parent_task: string | null;
 	escalated_at: number | null;
-	/** A task only one slot may take (a rebase must happen on the branch that holds the work). */
 	pin_slot: string | null;
 }
 
@@ -76,7 +58,6 @@ export interface NewTask {
 
 export type FailOutcome = { status: "queued" | "blocked"; attempts: number };
 
-/** First line of the task text, capped; what lists and status lines show. */
 export function taskTitle(body: string): string {
 	const firstLine = body.split("\n").find((line) => line.trim().length > 0) ?? body;
 	return firstLine.trim().slice(0, 120);
@@ -125,12 +106,6 @@ export class TaskQueue {
 		return this.byId(id) as TaskRow;
 	}
 
-	/**
-	 * Atomically take the oldest queued task of the group.
-	 *
-	 * Merge tasks are only visible to the integrator (`merge: true`); ordinary
-	 * workers never see them.
-	 */
 	claim(scope: TaskScope, owner: { agentId: string; slotId: string; seat: string; merge: boolean }): TaskRow | null {
 		const at = this.now();
 		const row = this.db
@@ -158,12 +133,7 @@ export class TaskQueue {
 		return row ?? null;
 	}
 
-	/**
-	 * The task landed in the owner's transcript. A task addressed to a seat before
-	 * its holder existed gets its owner here.
-	 */
 	markRunning(taskId: string, owner: { agentId: string; slotId: string | null }): void {
-		// The holder that actually receives the task owns it, even when the seat changed hands.
 		this.db.run(
 			`UPDATE tasks SET status = 'running', to_agent = ?, slot_id = COALESCE(?, slot_id),
 				updated_at = ? WHERE id = ? AND status IN ('assigned', 'claimed')`,
@@ -171,7 +141,6 @@ export class TaskQueue {
 		);
 	}
 
-	/** The task this member currently owns, either by session or by seat. Newest first. */
 	current(agentId: string, seat: string): TaskRow | null {
 		return (
 			(this.db
@@ -183,11 +152,6 @@ export class TaskQueue {
 		);
 	}
 
-	/**
-	 * The tasks a member holds, newest first, including ones it reported blocked:
-	 * a blocked task waits for an answer, and its holder continues it once the
-	 * answer arrives.
-	 */
 	heldAll(agentId: string, seat: string): TaskRow[] {
 		return this.db
 			.query(
@@ -197,12 +161,10 @@ export class TaskQueue {
 			.all(agentId, seat) as TaskRow[];
 	}
 
-	/** The newest task a member holds (see {@link heldAll}). */
 	held(agentId: string, seat: string): TaskRow | null {
 		return this.heldAll(agentId, seat)[0] ?? null;
 	}
 
-	/** A blocked task whose holder acts on it again goes back to running; a later block escalates again. */
 	resume(taskId: string): void {
 		this.db.run("UPDATE tasks SET status = 'running', escalated_at = NULL, updated_at = ? WHERE id = ? AND status = 'blocked'", [
 			this.now(),
@@ -210,7 +172,6 @@ export class TaskQueue {
 		]);
 	}
 
-	/** Open tasks addressed to `seat` that a previous holder of the seat owned. */
 	heldByPredecessor(seat: string, agentId: string): TaskRow[] {
 		return this.db
 			.query(
@@ -220,7 +181,6 @@ export class TaskQueue {
 			.all(seat, agentId) as TaskRow[];
 	}
 
-	/** Hand a predecessor's task to the seat's new holder. */
 	inherit(taskId: string, agentId: string, attempts: number): void {
 		this.db.run("UPDATE tasks SET status = 'assigned', to_agent = ?, attempts = ?, updated_at = ? WHERE id = ?", [
 			agentId,
@@ -242,7 +202,6 @@ export class TaskQueue {
 		this.db.run("UPDATE tasks SET status = 'blocked', updated_at = ? WHERE id = ?", [this.now(), taskId]);
 	}
 
-	/** Terminal failure with no retry (a merge that conflicted; its fix is a new task). */
 	failTerminal(taskId: string): void {
 		this.db.run("UPDATE tasks SET status = 'failed', attempts = attempts + 1, updated_at = ? WHERE id = ?", [
 			this.now(),
@@ -250,10 +209,6 @@ export class TaskQueue {
 		]);
 	}
 
-	/**
-	 * Count one failed attempt. Below the limit the task goes back to the queue
-	 * for any worker; at the limit it is blocked and needs a decision.
-	 */
 	fail(taskId: string, maxFailures: number): FailOutcome {
 		const task = this.byId(taskId);
 		if (!task) return { status: "blocked", attempts: 0 };
@@ -270,7 +225,6 @@ export class TaskQueue {
 		return { status: "queued", attempts };
 	}
 
-	/** Put a task back on the group queue for any worker (a pin, if set, still applies). */
 	requeue(taskId: string, attempts?: number): void {
 		this.db.run(
 			`UPDATE tasks SET status = 'queued', attempts = COALESCE(?, attempts), to_agent = NULL, to_seat = NULL,
@@ -279,7 +233,6 @@ export class TaskQueue {
 		);
 	}
 
-	/** A manager-level task whose holder died: hand it to whoever takes the seat next. */
 	reassignToSeat(taskId: string, attempts: number): void {
 		this.db.run("UPDATE tasks SET status = 'assigned', to_agent = NULL, attempts = ?, updated_at = ? WHERE id = ?", [
 			attempts,
@@ -288,7 +241,6 @@ export class TaskQueue {
 		]);
 	}
 
-	/** Open tasks this seat issued: what its holder patrols. */
 	issuedBy(seat: string, statuses: TaskStatus[]): TaskRow[] {
 		const rows = this.db
 			.query("SELECT * FROM tasks WHERE from_seat = ? ORDER BY created_at, rowid")
@@ -296,10 +248,6 @@ export class TaskQueue {
 		return rows.filter((row) => statuses.includes(row.status));
 	}
 
-	/**
-	 * Close tasks whose ancestor was closed; returns the ones that were still
-	 * open. The status guard keeps a task another process finished meanwhile.
-	 */
 	cancelOpen(tasks: TaskRow[]): TaskRow[] {
 		const stmt = this.db.prepare(
 			"UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE id = ? AND status IN ('queued', 'assigned', 'claimed', 'running', 'blocked')",
@@ -312,7 +260,6 @@ export class TaskQueue {
 		return cancelled;
 	}
 
-	/** Record activity on a task: it resets the stall clock. */
 	touch(taskId: string): void {
 		this.db.run("UPDATE tasks SET updated_at = ? WHERE id = ?", [this.now(), taskId]);
 	}
@@ -321,7 +268,6 @@ export class TaskQueue {
 		this.db.run("UPDATE tasks SET escalated_at = ? WHERE id = ?", [this.now(), taskId]);
 	}
 
-	/** Every task created on behalf of `rootId`: its children, their merges and reworks, recursively. */
 	descendants(rootId: string): TaskRow[] {
 		const out: TaskRow[] = [];
 		let frontier = [rootId];

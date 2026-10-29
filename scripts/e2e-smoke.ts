@@ -1,16 +1,3 @@
-/**
- * M0 acceptance harness.
- *
- * Drives real `omp --mode rpc` processes through the extension and checks the
- * properties M0 exists to prove:
- *   1. an idle manager folding 10 passive reports starts at most one turn
- *   2. an idle worker receiving a task starts a turn
- *   3. delivered mail is delivered once, never re-injected
- *   4. a manager's active tool set has no execution tools; a worker's does
- *   5. a killed member is marked dead without anyone else touching it
- *
- * Usage: bun scripts/e2e-smoke.ts [--keep]
- */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,7 +64,6 @@ function startSession(name: string, cwd: string, resumeSessionFile?: string): Se
 		],
 		{
 			cwd,
-			// RPC sessions are not herdr panes: drop the caller's pane identity so they never touch its pane.
 			env: {
 				...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("HERDR_"))),
 				OMP_TEAMS_HOME: teamsHome,
@@ -162,7 +148,6 @@ async function main(): Promise<void> {
 	if (!allReady) return finish();
 
 	const db = openTeamsDb();
-	// Registrations are chained: a child cannot register before its parent exists.
 	const waitForRole = (role: string): Promise<boolean> =>
 		waitFor(
 			() =>
@@ -192,8 +177,6 @@ async function main(): Promise<void> {
 		JSON.stringify(rows),
 	);
 
-	// 4. Tool policy: managers lose execution tools, workers keep them. The policy is applied
-	// asynchronously right after registration, so wait until both members have logged it.
 	const activeFor = (role: string): string[] => {
 		const agent = db.query("SELECT id FROM agents WHERE role = ?").get(role) as { id: string } | null;
 		if (!agent) return [];
@@ -236,7 +219,6 @@ async function main(): Promise<void> {
 		return finish();
 	}
 
-	// 1. Ten passive reports must not start a turn on an idle manager.
 	group.starts = 0;
 	for (let i = 1; i <= PASSIVE_REPORTS; i++) {
 		mailer.send({
@@ -261,7 +243,6 @@ async function main(): Promise<void> {
 		`turns=${group.starts}`,
 	);
 
-	// 3. Delivered mail is not injected twice.
 	const deliveredRows = db
 		.query("SELECT COUNT(*) AS n FROM messages WHERE to_seat = ? AND delivered_at IS NOT NULL")
 		.get(groupAgent.seat) as { n: number };
@@ -279,7 +260,6 @@ async function main(): Promise<void> {
 		`delivered=${deliveredRows.n} injected=${injected}`,
 	);
 
-	// 2. A wake message starts a turn on an idle worker.
 	worker.starts = 0;
 	mailer.send({
 		fromAgent: groupAgent.id,
@@ -297,10 +277,8 @@ async function main(): Promise<void> {
 	});
 	const wokeUp = await waitFor(() => worker.starts >= 1, 60_000, "worker turn after task");
 	check("an idle worker starts a turn when a task arrives", wokeUp, `turns=${worker.starts}`);
-	// Let the turn finish so the session is persisted before the restart check.
 	await waitFor(() => worker.ends >= 1, 120_000, "worker turn to finish");
 
-	// 6. Mail addressed to a stopped member survives and is delivered after it restarts.
 	const workerRow = db.query("SELECT session_file FROM agents WHERE id = ?").get(workerAgent.id) as {
 		session_file: string | null;
 	} | null;
@@ -338,7 +316,6 @@ async function main(): Promise<void> {
 			"stranded mail delivered after restart",
 		);
 		check("a restarted member receives its stranded mail", resumedReady && redelivered);
-		// Delivery is recorded right after the message is handed to the session; the turn starts a moment later.
 		const restoredTurn = await waitFor(() => resumed.starts >= 1, 30_000, "turn on the restarted member");
 		check("the restored message starts a turn on the restarted member", restoredTurn, `turns=${resumed.starts}`);
 		stop(resumed);
@@ -347,7 +324,6 @@ async function main(): Promise<void> {
 		check("the worker row records its session file", false);
 	}
 
-	// 5. A killed member is marked dead by everyone else's sweep.
 	const died = await waitFor(
 		() =>
 			(db.query("SELECT status FROM agents WHERE id = ?").get(workerAgent.id) as { status: string }).status ===

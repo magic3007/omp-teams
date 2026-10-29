@@ -43,7 +43,6 @@ interface Team {
 	w2Worktree: string;
 }
 
-/** personal -> project -> group feat-x -> w1, w2 + integrator, with real worktrees. */
 function team(options: { verify?: string } = {}): Team {
 	const project = { id: "p-1", name: "repo", root: repo };
 	if (options.verify !== undefined) {
@@ -136,7 +135,6 @@ function fresh(agent: AgentRow): AgentRow {
 	return row;
 }
 
-/** Let time pass while every live member keeps its heartbeat (as their poll timers would). */
 function advance(ms: number): void {
 	clock += ms;
 	for (const row of runtime.registry.allAlive()) runtime.registry.heartbeat(row.id);
@@ -280,7 +278,6 @@ describe("claim, report, merge loop", () => {
 		if (!report.ok) throw new Error(report.error);
 		expect(report.followUp).toContain("merge");
 
-		// Only the integrator can see the merge.
 		expect(runtime.claimNext(t.w2)).toBeNull();
 		const merge = runtime.claimNext(t.integrator);
 		expect(merge?.kind).toBe("merge");
@@ -317,7 +314,6 @@ describe("claim, report, merge loop", () => {
 		expect(outcome.ok && outcome.summary).toContain("sent back");
 		expect(runtime.taskById(m2.id)?.status).toBe("failed");
 
-		// The rework only reaches w2, the author of the conflicting commit.
 		expect(runtime.claimNext(t.w1)).toBeNull();
 		const rework = runtime.claimNext(t.w2);
 		expect(rework?.kind).toBe("fix");
@@ -425,7 +421,6 @@ describe("patrol", () => {
 		if (!res.ok) throw new Error(res.error);
 		runtime.claimNext(t.w1);
 
-		// w1 stops heartbeating; everyone else keeps going.
 		clock += DEAD_AFTER + 1_000;
 		for (const agent of [t.group, t.project, t.w2, t.integrator]) runtime.registry.heartbeat(agent.id);
 		runtime.registry.heartbeat(runtime.registry.bySeat("personal")?.id ?? "");
@@ -451,7 +446,6 @@ describe("patrol", () => {
 		if (!res.ok) throw new Error(res.error);
 		runtime.taskDelivered(res.taskId, t.w1);
 
-		// The launcher restarted w1 in the same pane with a fresh session.
 		const respawn = runtime.register(
 			{
 				role: "worker",
@@ -508,7 +502,6 @@ describe("patrol", () => {
 		if (!merge) throw new Error("no merge");
 		runtime.merge(t.integrator, merge.id);
 
-		// Finished work closes the task only after the grace period, not at once.
 		expect(runtime.patrol(fresh(t.group)).drained).toBe(false);
 		advance(CLOSE_GRACE_MS);
 		const result = runtime.patrol(fresh(t.group));
@@ -559,7 +552,6 @@ describe("work traces back to a request", () => {
 		const first = runtime.assign(t.project, { to: t.group.label, task: "first slice", kind: "feature", difficulty: "normal" });
 		if (!first.ok) throw new Error(first.error);
 		runtime.taskDelivered(first.taskId, t.group);
-		// Nothing has been delegated for this task yet: it must stay open.
 		expect(runtime.patrol(fresh(t.group)).drained).toBe(false);
 		expect(runtime.taskById(first.taskId)?.status).toBe("running");
 	});
@@ -574,7 +566,6 @@ describe("group branch integrity", () => {
 		const sha = commitFile(t.w1Worktree, "a.txt", "a\n", "a");
 		runtime.report(t.w1, { taskId: res.taskId, status: "done", sha, summary: "a" });
 
-		// Someone rewrites the group branch behind the integrator's back.
 		commitFile(t.groupWorktree, "rogue.txt", "x\n", "rogue");
 
 		const merge = runtime.claimNext(t.integrator);
@@ -609,7 +600,6 @@ describe("done means done", () => {
 		runtime.claimNext(t.w1);
 		runtime.taskDelivered(part.taskId, t.w1);
 
-		// The project lead declares the request done while its group is still working.
 		const report = runtime.report(t.project, { taskId: top.taskId, status: "done", summary: "good enough" });
 		expect(report.ok && report.followUp).toContain("2 open task(s)");
 		expect(runtime.taskById(slice.taskId)?.status).toBe("cancelled");
@@ -619,7 +609,6 @@ describe("done means done", () => {
 		expect(workerCancel?.body).toContain(part.taskId);
 		expect(runtime.takeInbox(t.group).some((row) => row.kind === "cancel")).toBe(true);
 
-		// The lead has nothing open, so it cannot invent follow-ups; the worker cannot close a cancelled task.
 		expect(runtime.assign(fresh(t.group), { task: "polish", kind: "fix", difficulty: "simple", requireOpenTask: true })).toEqual({
 			ok: false,
 			error: NO_OPEN_TASK,
@@ -635,7 +624,6 @@ describe("done means done", () => {
 		const res = runtime.assign(t.group, { task: "verify", kind: "test", difficulty: "simple" });
 		if (!res.ok) throw new Error(res.error);
 		runtime.claimNext(t.w1);
-		// The worker reports the group head it verified, which the group branch already has.
 		const head = git(t.groupWorktree, ["rev-parse", "HEAD"]);
 		git(t.w1Worktree, ["reset", "-q", "--hard", head]);
 		const report = runtime.report(t.w1, { taskId: res.taskId, status: "done", sha: head, summary: "verified" });
@@ -665,7 +653,6 @@ describe("leaders lead", () => {
 		runtime.report(t.group, { taskId: slice.taskId, status: "blocked", summary: "which file format?" });
 		expect(runtime.taskById(slice.taskId)?.status).toBe("blocked");
 
-		// The answer arrives by teams_ask; the lead delegates under the same task, which runs again.
 		const part = runtime.assign(fresh(t.group), { task: "part", kind: "feature", difficulty: "simple", requireOpenTask: true });
 		if (!part.ok) throw new Error(part.error);
 		expect(runtime.taskById(part.taskId)?.parent_task).toBe(slice.taskId);
@@ -719,7 +706,6 @@ describe("leaders lead", () => {
 
 		advance(CLOSE_GRACE_MS);
 		expect(runtime.patrol(fresh(t.group)).drained).toBe(true);
-		// The repo leader's own work (the group's task) just finished: it waits out its grace too.
 		advance(CLOSE_GRACE_MS);
 		expect(runtime.patrol(fresh(t.project)).drained).toBe(true);
 		const head = git(t.groupWorktree, ["rev-parse", "HEAD"]);
@@ -750,7 +736,6 @@ describe("leaders lead", () => {
 		});
 		expect(foreign.ok).toBe(false);
 
-		// Work for the older task only: it closes, the newer one stays open.
 		const part = runtime.assign(fresh(t.group), {
 			task: "part of slice one",
 			kind: "feature",
@@ -776,7 +761,6 @@ describe("leaders lead", () => {
 describe("status counts", () => {
 	test("the integrator is not counted as a worker", () => {
 		const t = team();
-		// w1, w2 and the integrator are alive in group feat-x.
 		expect(runtime.counts(t.group).workers).toBe(2);
 		expect(runtime.counts(t.project).workers).toBe(2);
 	});
@@ -812,7 +796,6 @@ describe("review fixes", () => {
 
 	test("without an integrator the done report says the commit still needs merging", () => {
 		const t = team();
-		// As with `auto_integrator: false`: the group has no integrator slot at all.
 		db.run("DELETE FROM slots WHERE kind = 'integrator'");
 		const res = runtime.assign(t.group, { task: "a", kind: "feature", difficulty: "simple" });
 		if (!res.ok) throw new Error(res.error);
@@ -838,7 +821,6 @@ describe("evidence on every leader done report", () => {
 		if (!merge) throw new Error("no merge");
 		runtime.merge(t.integrator, merge.id);
 
-		// The lead closes its task by hand, before the automatic close.
 		const report = runtime.report(fresh(t.group), { taskId: slice.taskId, status: "done", summary: "all good" });
 		expect(report.ok).toBe(true);
 		const head = git(t.groupWorktree, ["rev-parse", "HEAD"]);
@@ -860,7 +842,6 @@ describe("brakes", () => {
 		expect(runtime.registry.group("p-1", "feat-x")?.paused).toBe(1);
 		expect(runtime.registry.group("p-1", "feat-x")?.paused_reason).toBe("halt");
 
-		// Workers stop claiming, merging keeps working, leaders cannot assign.
 		expect(runtime.claimNext(t.w1)).toBeNull();
 		expect(runtime.assign(fresh(t.project), { to: t.group.label, task: "nope", kind: "fix", difficulty: "simple" })).toEqual({
 			ok: false,
@@ -880,7 +861,6 @@ describe("brakes", () => {
 		if (!personal) throw new Error("no personal");
 		runtime.pause(personal, "feat-x", true);
 		runtime.halt(personal, "halt test");
-		// The human pause is not relabelled as a brake pause.
 		expect(runtime.registry.group("p-1", "feat-x")?.paused_reason).toBeNull();
 		runtime.resume(personal);
 		expect(runtime.registry.group("p-1", "feat-x")?.paused).toBe(1);
@@ -891,7 +871,6 @@ describe("brakes", () => {
 		const t = team();
 		const personal = runtime.registry.bySeat("personal");
 		if (!personal) throw new Error("no personal");
-		// A one-cent budget in the machine config: any reported spend trips it.
 		writeFileSync(join(home, "config.yml"), "guards:\n  budget:\n    daily_usd: 0.01\n");
 		runtime.invalidateConfig();
 		runtime.recordUsage(personal, 0.02);
@@ -931,7 +910,6 @@ describe("brakes", () => {
 		expect(second.ok).toBe(false);
 		if (second.ok) throw new Error("unreachable");
 		expect(second.error).toContain("wait");
-		// The ping carries the fresh flag so the receiver runs an ephemeral turn.
 		const ping = runtime.takeInbox(t.w1).find((row) => row.kind === "ping");
 		expect(mailBodyOf(ping ?? { body: "{}" })).toMatchObject({ fresh: true });
 	});

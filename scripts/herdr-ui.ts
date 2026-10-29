@@ -1,16 +1,3 @@
-/**
- * UI acceptance in a real omp TUI: status lines, the manager widget and the
- * `/teams tree` overlay.
- *
- * Brings up personal -> repo leader -> group leader -> two workers and the
- * integrator in temporary herdr workspaces, then checks what each pane shows
- * and drives the tree overlay with real key presses. Worker panes are only
- * read, never typed into: typing there means a human takes the worker over.
- * At the end it prints every status line (with colours under --ansi) for a
- * human to look at.
- *
- * Run from inside herdr: `bun run test:herdr:ui` (add `-- --ansi` for colours).
- */
 import { sessionTag } from "../src/identity";
 import { aliveCount, bringUpGroup, check, createHarness, finish, queryAll, queryOne, run, waitFor } from "./harness";
 
@@ -30,7 +17,6 @@ function screen(paneId: string, format: "text" | "ansi" = "text"): string {
 	return Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" }).stdout.toString();
 }
 
-/** The status line of a member: the lowest visible line that carries its label (rank glyph and full name). */
 function statusRow(member: Member, format: "text" | "ansi" = "text"): string {
 	const plain = screen(member.pane_id).split("\n");
 	const index = plain.findLastIndex((line) => line.includes(member.label));
@@ -48,7 +34,6 @@ function member(label: string): Member {
 	return row;
 }
 
-/** The full session id shown in the overlay footer, if any. */
 function footerSession(paneId: string): string | null {
 	return screen(paneId).match(/session {2}(\S+)/)?.[1] ?? null;
 }
@@ -68,13 +53,10 @@ async function main(): Promise<void> {
 	const w2 = member("☆ worker 2 · feat-x");
 	const integrator = member("☆ integrator · feat-x");
 	const everyone = [personal, repo, lead, w1, w2, integrator];
-	// What the UI must show for each member: a session tag unique among everyone alive.
 	const pool = everyone.map((who) => who.session_id);
 	const tag = (who: Member): string => sessionTag(who.session_id, pool);
 	check(h, "every member gets a distinct session tag", new Set(everyone.map(tag)).size === everyone.length, everyone.map(tag).join(" "));
 
-	// 1. Status lines: rank glyph and full name first, head counts by rank, branch, manager.
-	// The integrator is not counted as a worker: two workers in the group.
 	const expectations: [Member, string[]][] = [
 		[personal, ["★★★ personal leader", "★★ 1 repo leader", "★ 1 group leader", "☆ 2 workers"]],
 		[repo, ["★★ repo leader · repo", "★ 1 group leader", "☆ 2 workers", "↑ personal leader"]],
@@ -90,7 +72,6 @@ async function main(): Promise<void> {
 		check(h, `status line of ${who.label}`, missing.length === 0, missing.length ? `missing ${missing.join(", ")} in: ${row.trim()}` : row.trim());
 	}
 
-	// 2. Manager widgets list each direct report with its session id.
 	const widgetCases: [Member, Member[]][] = [
 		[personal, [repo]],
 		[repo, [lead]],
@@ -107,7 +88,6 @@ async function main(): Promise<void> {
 		);
 	}
 
-	// 3. `/teams tree` overlay below the group leader, driven by keys.
 	run(h, lead.pane_id, "/teams tree");
 	const opened = await waitFor(() => screen(lead.pane_id).includes("team below ★ group leader · feat-x"), 20_000, "tree overlay");
 	const overlay = screen(lead.pane_id);
@@ -142,7 +122,6 @@ async function main(): Promise<void> {
 	const closed = await waitFor(() => !screen(lead.pane_id).includes("team below"), 5_000, "overlay closed");
 	check(h, "esc closes the overlay", closed);
 
-	// 4. `--all` from the repo leader shows the whole machine.
 	run(h, repo.pane_id, "/teams tree --all");
 	const allOpened = await waitFor(() => screen(repo.pane_id).includes("whole team on this machine"), 20_000, "whole-machine overlay");
 	const all = screen(repo.pane_id);
@@ -155,7 +134,6 @@ async function main(): Promise<void> {
 	keys(repo.pane_id, "q");
 	check(h, "q closes the overlay", await waitFor(() => !screen(repo.pane_id).includes("whole team on this machine"), 5_000, "closed"));
 
-	// 5. The text form with session files, for logs and non-interactive modes.
 	run(h, personal.pane_id, "/teams tree --text --paths");
 	const textShown = await waitFor(() => screen(personal.pane_id).includes("└─ ★★ repo leader · repo"), 20_000, "text tree");
 	const text = screen(personal.pane_id);
@@ -165,14 +143,12 @@ async function main(): Promise<void> {
 	check(
 		h,
 		"`/teams tree --text --paths` prints the hierarchy with session files",
-		// Long paths wrap in the transcript; compare with the line breaks removed.
 		textShown &&
 			text.includes("★★★ personal leader (you)") &&
 			sessionFiles.some((file) => text.replace(/\s+/g, "").includes(file.split("/").pop() ?? "\u0000")),
 		textShown ? `${sessionFiles.length} session files known` : text.split("\n").slice(-6).join(" ⏎ "),
 	);
 
-	// 6. Live work, then print every status line for a human.
 	run(h, lead.pane_id, "/teams assign queue feature simple Write a haiku about merges into poem.txt, commit it, report done with the sha.");
 	await Bun.sleep(15_000);
 	console.log("\nstatus lines:");

@@ -1,14 +1,3 @@
-/**
- * Spawning: how a manager puts a subordinate into herdr.
- *
- * The parent writes a launcher script and runs it in a fresh pane. The child's
- * identity arrives as `OMP_TEAMS_JOIN`, which the extension consumes on session
- * start, so a spawned member registers itself without a human running `/teams`.
- *
- * Layout: one workspace per repository, a `★★ repo leader` tab, one
- * `★ group leader · <g>` tab per group (its integrator beside the lead), and
- * worker tabs `☆ workers · <g>` holding up to `limits.workers_per_tab` panes.
- */
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { TeamsConfig } from "./config";
@@ -21,7 +10,6 @@ import { addWorktree, branchHead, currentBranch } from "./worktree";
 export interface SpawnDeps {
 	runtime: TeamsRuntime;
 	herdr: Herdr;
-	/** omp-teams home, where launcher scripts are written. */
 	home: string;
 	config: TeamsConfig;
 	env?: Record<string, string | undefined>;
@@ -29,10 +17,8 @@ export interface SpawnDeps {
 
 export type SpawnOutcome<T> = { ok: true; value: T } | { ok: false; error: string };
 
-/** Tab of the repo leader in each repository workspace. */
 const REPO_TAB = `${RANK_GLYPH.project} ${ROLE_TITLE.project}`;
 
-/** Worker tabs are numbered by the count of such panes; the first one has no number. */
 function workerTabLabel(groupName: string): string {
 	return `${RANK_GLYPH.worker} workers · ${groupName}`;
 }
@@ -41,7 +27,6 @@ function shq(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Encode the join contract as a single space-separated `k=v` string. */
 export function encodeJoin(fields: Record<string, string | number | undefined>): string {
 	return Object.entries(fields)
 		.filter(([, value]) => value !== undefined && value !== "")
@@ -59,14 +44,6 @@ export function decodeJoin(raw: string): Record<string, string> {
 	return out;
 }
 
-/**
- * Launcher: keeps the member alive in its pane.
- *
- * omp exiting is normal (rotation, crash); the loop starts a fresh session in
- * the same slot. A stop file written by the extension (retire, leave) ends the
- * loop, and three quick exits in a row end it too, so a broken member cannot
- * spin forever.
- */
 export function launcherScript(input: {
 	home: string;
 	cwd: string;
@@ -126,7 +103,6 @@ export interface SpawnedProject {
 	script: string;
 }
 
-/** Personal manager → a project lead for one repository. */
 export function spawnProject(
 	deps: SpawnDeps,
 	actor: AgentRow,
@@ -182,7 +158,6 @@ export interface SpawnedGroup {
 	script: string;
 }
 
-/** Project lead → a group lead with its own worktree and herdr tab. */
 export function spawnGroup(
 	deps: SpawnDeps,
 	actor: AgentRow,
@@ -248,7 +223,6 @@ export interface SpawnedWorker {
 	script: string;
 }
 
-/** Group lead → a worker in its own worktree, inside a worker tab with spare room. */
 export function spawnWorker(deps: SpawnDeps, actor: AgentRow, options: { count?: number } = {}): SpawnOutcome<SpawnedWorker[]> {
 	const allowed = requireRole(actor, "group");
 	if (!allowed.ok) return allowed;
@@ -283,7 +257,6 @@ export function spawnWorker(deps: SpawnDeps, actor: AgentRow, options: { count?:
 	for (let i = 0; i < wanted; i++) {
 		const index = existingSlots.length + spawned.length + 1;
 		const worktreePath = resolve(config.worktree_root, projectId, groupName, `w${index}`);
-		// `teams/<group>` already occupies that ref path, so worker refs live under their own namespace.
 		const branch = `teams-w/${groupName}/w${index}`;
 		const worktree = addWorktree(resolve(config.worktree_root, projectId, groupName, "group"), worktreePath, branch, group.branch);
 		if (!worktree.ok) return { ok: false, error: worktree.error ?? "worker worktree creation failed" };
@@ -330,10 +303,6 @@ export function spawnWorker(deps: SpawnDeps, actor: AgentRow, options: { count?:
 	return { ok: true, value: spawned };
 }
 
-/**
- * The group's integrator: a cheap-model worker that only runs `teams_merge` in
- * the group worktree. It sits beside the group lead in the lead's tab.
- */
 export function spawnIntegrator(deps: SpawnDeps, actor: AgentRow, group: GroupRow): SpawnOutcome<SpawnedWorker> {
 	if (!actor.project_id || !actor.group_name) return { ok: false, error: `${actor.label} is not bound to a group` };
 	const slot = deps.runtime.slots.ensure({
@@ -374,10 +343,6 @@ export function spawnIntegrator(deps: SpawnDeps, actor: AgentRow, group: GroupRo
 	}
 }
 
-/**
- * Pick a pane for the next worker: split the last worker pane of a tab that still
- * has room, otherwise open the next `☆ workers · <group>` tab.
- */
 function placeWorkerPane(
 	deps: SpawnDeps,
 	input: {

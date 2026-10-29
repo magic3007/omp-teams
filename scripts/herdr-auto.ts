@@ -1,17 +1,3 @@
-/**
- * Autonomy acceptance: one sentence to the personal manager, nothing else.
- *
- * A human types a single request into the personal manager's pane. From there
- * every step is taken by the team itself: the personal manager spawns a project
- * lead, the project lead spawns group leads, group leads spawn workers and queue
- * tasks, workers commit, the integrator merges, and each manager closes its task
- * when everything it issued is done.
- *
- * The check is on outcomes only: the requested files exist with the requested
- * content on a group branch, and the task the personal manager issued is done.
- *
- * Run from inside herdr: `bun run test:herdr:auto` (takes several minutes).
- */
 import {
 	aliveCount,
 	check,
@@ -57,7 +43,6 @@ function fileOnSomeBranch(file: string, expected: string): string | null {
 	return teamBranches().find((branch) => branchFile(branch, file)?.replace(/\r/g, "") === expected) ?? null;
 }
 
-/** The request asks for both files on a team branch: one branch must carry both. */
 function branchWithBoth(files: [string, string][]): string | null {
 	return (
 		teamBranches().find((branch) => files.every(([file, expected]) => branchFile(branch, file)?.replace(/\r/g, "") === expected)) ??
@@ -81,7 +66,6 @@ async function main(): Promise<void> {
 		["colors.txt", colors],
 		["shapes.txt", shapes],
 	];
-	// Every task the personal leader issued must close; a duplicate task for the same request is a finding.
 	const personalTasks = () =>
 		queryAll<{ id: string; status: string }>(h, "SELECT id, status FROM tasks WHERE from_seat = 'personal' ORDER BY created_at");
 	const closed = await waitFor(
@@ -89,7 +73,6 @@ async function main(): Promise<void> {
 		1_500_000,
 		"every task of the personal leader closes",
 	);
-	// Workers may be retired once their work is done, so count the seats that ever existed.
 	const tree = queryAll<{ label: string }>(h, "SELECT label FROM agents ORDER BY registered_at");
 	const count = (sql: string): number => queryOne<{ n: number }>(h, sql)?.n ?? 0;
 	check(
@@ -100,11 +83,9 @@ async function main(): Promise<void> {
 			count("SELECT COUNT(*) AS n FROM slots WHERE kind = 'worker'") >= 1,
 		[...new Set(tree.map((row) => row.label))].join(", "),
 	);
-	// The team must never change main, whatever the leaders ask for.
 	const mainLog = Bun.spawnSync(["git", "-C", h.repo, "rev-list", "--count", "main"], { stdout: "pipe" }).stdout.toString().trim();
 	const mainStatus = Bun.spawnSync(["git", "-C", h.repo, "status", "--porcelain"], { stdout: "pipe" }).stdout.toString().trim();
 	check(h, "main and the main checkout are untouched", mainLog === "1" && mainStatus === "", `commits on main: ${mainLog}; status: ${mainStatus || "clean"}`);
-	// Two three-line files are a small objective: the repo leader's rule is one group for it.
 	const groupNames = queryAll<{ name: string }>(h, "SELECT name FROM groups ORDER BY created_at").map((row) => row.name);
 	check(h, "a small request is handled by one group", groupNames.length === 1, groupNames.join(", ") || "none");
 	const both = branchWithBoth(wanted);
@@ -137,7 +118,6 @@ async function main(): Promise<void> {
 	const blocked = tasks.filter((task) => task.status === "blocked");
 	check(h, "nothing is left blocked", blocked.length === 0, blocked.map((task) => task.id).join(" "));
 
-	// Convergence: once the request is closed, the team goes quiet instead of inventing follow-ups.
 	const before = tasks.length;
 	await Bun.sleep(90_000);
 	const after = queryAll<{ id: string; status: string; title: string; from_seat: string }>(
@@ -153,8 +133,6 @@ async function main(): Promise<void> {
 		[...open, ...fresh].map((task) => `${task.id}:${task.status}:${task.title.slice(0, 40)}`).join(" | ") || "quiet",
 	);
 
-	// Integrity: every change reached the group branches through the integrator. A group that
-	// committed nothing (only read) has no merges, and that is fine.
 	const rewrites = queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM events WHERE kind = 'merge:head-mismatch'")?.n ?? 0;
 	const branches = teamBranches();
 	const git = (args: string[]): string => Bun.spawnSync(["git", "-C", h.repo, ...args], { stdout: "pipe" }).stdout.toString().trim();

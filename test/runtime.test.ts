@@ -274,7 +274,6 @@ describe("tree and departures", () => {
 			"   └─ ★ group leader · feat-x  ⏳ idle  session s-group",
 			"      └─ ☆ worker 1 · feat-x  ⏳ idle  session s-worker",
 		]);
-		// From a group leader, the tree starts at the group leader.
 		const below = treeText(buildTeamTree(runtime, group), { selfId: group.id });
 		expect(below[0]).toContain("★ group leader · feat-x (you)");
 		expect(below).toHaveLength(2);
@@ -282,10 +281,9 @@ describe("tree and departures", () => {
 	});
 
 	test("session tags tell apart members started in the same minute and stay resumable prefixes", () => {
-		// Real omp ids from one run: UUIDv7, the first 8 hex digits are shared.
 		const lead = "01a18300-3589-7000-a61a-7762cdd79a6c";
 		const w1 = "01a18300-4cfe-7000-9662-049ded4d6b62";
-		const w2 = "01a18300-4cfe-7000-8641-38f59a1e6b43"; // same millisecond as w1
+		const w2 = "01a18300-4cfe-7000-8641-38f59a1e6b43";
 		const pool = [lead, w1, w2];
 		expect(sessionTag(lead, pool)).toBe("01a18300-3589");
 		expect(sessionTag(w1, pool)).toBe("01a18300-4cfe-7000-9");

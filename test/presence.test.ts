@@ -49,7 +49,6 @@ function input(overrides: Partial<PresenceInput>): PresenceInput {
 	};
 }
 
-/** Marks tone and bold so tests can see how a segment is painted. */
 const TAG_PAINTER: Painter = {
 	icon: (key) => `<${key}>`,
 	paint: (tone, text, bold) => `[${tone}${bold ? "!" : ""}:${text}]`,

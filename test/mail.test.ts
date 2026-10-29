@@ -23,14 +23,12 @@ afterEach(() => {
 
 describe("delivery policy", () => {
 	test("a wake message starts a turn when idle and queues behind a running one", () => {
-		// Idle: followUp + triggerTurn starts the turn.
 		expect(decideDelivery("task", true, false)).toEqual({
 			deliverAs: "followUp",
 			triggerTurn: true,
 			abortFirst: false,
 			passive: false,
 		});
-		// Busy: the same shape is queued as a follow-up by the session, so nothing is lost.
 		expect(decideDelivery("task", true, true)).toEqual({
 			deliverAs: "followUp",
 			triggerTurn: true,

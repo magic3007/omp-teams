@@ -1,10 +1,3 @@
-/**
- * Shared helpers for the herdr acceptance scripts.
- *
- * Every script works in a temporary root with its own `OMP_TEAMS_HOME`, opens
- * only workspaces it records in `createdWorkspaces`, and closes them at the end
- * (set `KEEP=1` to leave everything in place for inspection).
- */
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,10 +57,6 @@ function isTransient(message: string): boolean {
 	return message.includes("locked") || message.includes("busy");
 }
 
-/**
- * Read through the teams DB. A missing table means the extension has not migrated
- * the file yet and reads as "no rows"; locks are retried; other SQL errors throw.
- */
 export function queryOne<T>(h: Harness, sql: string, params: (string | number | null)[] = []): T | null {
 	for (let attempt = 0; ; attempt++) {
 		const handle = new Database(join(h.teamsHome, "teams.db"));
@@ -132,11 +121,6 @@ function agentStatus(paneId: string): string | null {
 	return parsed.result?.pane?.agent_status ?? null;
 }
 
-/**
- * Type a prompt into an omp pane and make sure it was submitted: a long text can
- * land in the editor without its Enter. Presses Enter again until the agent
- * starts working (or `taken` reports the effect), at most three times.
- */
 export async function submit(h: Harness, paneId: string, text: string, taken: () => boolean = () => false): Promise<boolean> {
 	run(h, paneId, text);
 	for (let attempt = 0; attempt < 3; attempt++) {
@@ -146,7 +130,6 @@ export async function submit(h: Harness, paneId: string, text: string, taken: ()
 	return taken() || agentStatus(paneId) === "working";
 }
 
-/** The tail of a pane, so a failed command's message lands in the report. */
 export function paneTail(paneId: string, lines = 25): string {
 	const result = Bun.spawnSync(
 		["herdr", "pane", "read", paneId, "--source", "recent-unwrapped", "--lines", String(lines)],
@@ -163,7 +146,6 @@ export function lastLines(paneId: string, count: number): string {
 		.join(" ⏎ ");
 }
 
-/** Start a personal manager in its own workspace; returns its pane id. */
 export function launchPersonal(h: Harness): string {
 	const workspace = h.herdr.createWorkspace(h.root, `★★★ ${h.tag}`);
 	if (!workspace.ok) throw new Error(workspace.error);
@@ -187,7 +169,6 @@ export function launchPersonal(h: Harness): string {
 }
 
 export function cleanup(h: Harness): void {
-	// Project workspaces may have been opened by a manager model, not by the script.
 	for (const row of queryAll<{ workspace_id: string }>(h, "SELECT workspace_id FROM projects WHERE workspace_id IS NOT NULL")) {
 		if (!h.createdWorkspaces.includes(row.workspace_id)) h.createdWorkspaces.push(row.workspace_id);
 	}
@@ -209,7 +190,6 @@ export function finish(h: Harness, label: string): never {
 	process.exit(0);
 }
 
-/** personal → project → group, through `/teams spawn`. Returns pane ids, or null on failure. */
 export async function bringUpGroup(
 	h: Harness,
 	group: string,

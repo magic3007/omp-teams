@@ -1,9 +1,3 @@
-/**
- * `/teams` command surface.
- *
- * Commands are the only manual way into the hierarchy: a session with no
- * `OMP_TEAMS_SLOT` and no registration stays invisible to the team.
- */
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -70,7 +64,6 @@ export function parseArgs(raw: string): ParsedArgs {
 	return { positional, flags };
 }
 
-/** A path from a command line: `~` and `~/x` expand, everything else resolves. */
 export function expandPath(path: string): string {
 	if (path === "~") return homedir();
 	if (path.startsWith("~/")) return join(homedir(), path.slice(2));
@@ -201,7 +194,6 @@ export function registerTeamsCommands(
 
 					let worktree: string | null = null;
 					let branch = `teams/${name}`;
-					// The branch the group's work is measured against (its changes are reported relative to it).
 					const base = existingGroup?.base ?? git(project.root, ["symbolic-ref", "--short", "HEAD"]) ?? "HEAD";
 
 					if (typeof flags.worktree === "string") {
@@ -215,7 +207,6 @@ export function registerTeamsCommands(
 						worktree = existingGroup.worktree;
 						branch = existingGroup.branch;
 					} else {
-						// Default: create the worktree under the configured root.
 						const target = resolve(config.worktree_root, project.id, name, "group");
 						if (!existsSync(target)) {
 							const added = git(project.root, ["worktree", "add", target, "-b", branch, base]);
@@ -690,7 +681,6 @@ export function registerTeamsCommands(
 					runtime.leave(me);
 					await host.applyToolPolicy();
 					host.notify(`${me.label} left the team`, "info");
-					// A spawned member runs under a launcher loop; leaving must not trigger a restart.
 					if (process.env.OMP_TEAMS_STOP) host.stopMember();
 					return;
 				}

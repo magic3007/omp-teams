@@ -1,10 +1,3 @@
-/**
- * Role guidance appended to the system prompt of a member.
- *
- * The tool policy enforces what a role may call; this text explains how the
- * role works, so a cheap manager model delegates and closes the loop instead of
- * trying to edit files or waiting for nothing.
- */
 import type { AgentRow } from "./registry";
 
 const COMMON = [
@@ -17,18 +10,12 @@ const COMMON = [
 	"When new work is refused (halt, spent budget, outside the working window), do not retry: report what is finished and wait for a human.",
 ].join("\n");
 
-/** Leaders delegate by design; their missing shell and edit tools are never a blocker. */
 const NO_EXECUTION =
 	"You have no shell, edit or write tools by design. You never execute work, and a missing tool is never a reason to report blocked: delegate instead.";
 
-/** Branches are the team's business; a task that names them confuses everyone below. */
 const OUTCOMES_NOT_GIT =
 	"Describe outcomes (files, behaviour, tests, what done means), never git steps, branch names or worktrees: every group works on its own `teams/<group>` branch, every worker commits in its own worktree, and the integrator merges. The team never changes the main checkout or the main branch: a request is delivered on `teams/<group>` branches, and a human merges them into main.";
 
-/**
- * One line put in front of every task a member receives, so the role holds
- * whatever the task text says: a leader delegates, a worker stays in its worktree.
- */
 export function taskPreface(agent: AgentRow, workplace?: { worktree: string; branch: string } | null): string | undefined {
 	switch (agent.role) {
 		case "project":

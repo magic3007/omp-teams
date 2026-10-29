@@ -1,10 +1,3 @@
-/**
- * SQLite storage for the team registry, mailbox, tasks and audit trail.
- *
- * One database per machine, shared by every member process. WAL allows many
- * concurrent readers and serialized writers; every write retries for up to
- * `busy_timeout` instead of failing under contention.
- */
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -103,7 +96,6 @@ CREATE TABLE IF NOT EXISTS events (
 );
 `;
 
-/** v2: worker slots (a seat that survives session replacement), spawn tickets, herdr ids. */
 const MIGRATION_V2 = `
 ALTER TABLE projects ADD COLUMN workspace_id TEXT;
 ALTER TABLE tasks ADD COLUMN slot_id TEXT;
@@ -127,14 +119,12 @@ CREATE TABLE IF NOT EXISTS slots (
 CREATE INDEX IF NOT EXISTS slots_group ON slots(project_id, group_name, kind);
 `;
 
-/** v3: herdr layout binding for groups, so a spawn knows where its tab and lead live. */
 const MIGRATION_V3 = `
 ALTER TABLE groups ADD COLUMN workspace_id TEXT;
 ALTER TABLE groups ADD COLUMN tab_id TEXT;
 ALTER TABLE groups ADD COLUMN lead_pane_id TEXT;
 `;
 
-/** v4: queue/claim bookkeeping, seat addressing, merge provenance, escalation, group pause, slot flags. */
 const MIGRATION_V4 = `
 ALTER TABLE tasks ADD COLUMN from_seat TEXT;
 ALTER TABLE tasks ADD COLUMN to_seat TEXT;
@@ -154,16 +144,11 @@ CREATE INDEX IF NOT EXISTS tasks_queue ON tasks(project_id, group_name, status, 
 CREATE INDEX IF NOT EXISTS tasks_from_seat ON tasks(from_seat, status);
 `;
 
-/** v5: last group-branch head written by the integrator, to detect rewrites by anyone else. */
 const MIGRATION_V5 = `
 ALTER TABLE groups ADD COLUMN head_sha TEXT;
 CREATE INDEX IF NOT EXISTS tasks_parent ON tasks(parent_task);
 `;
 
-/**
- * v6: brake state (halt), self-reported spend per session and day, and why a
- * group stopped claiming (halt/budget/failure guard, as opposed to a human pause).
- */
 const MIGRATION_V6 = `
 CREATE TABLE IF NOT EXISTS state (
 	key        TEXT PRIMARY KEY,
@@ -184,7 +169,6 @@ CREATE INDEX IF NOT EXISTS usage_day ON usage(day);
 ALTER TABLE groups ADD COLUMN paused_reason TEXT;
 `;
 
-/** v7: token counts beside the cost, so a budget works when a provider reports no price. */
 const MIGRATION_V7 = `
 ALTER TABLE usage ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE usage ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
@@ -216,7 +200,6 @@ function migrate(db: Database): void {
 	})();
 }
 
-/** Append an audit row. Never throws; auditing must not break team operations. */
 export function logEvent(
 	db: Database,
 	kind: string,
@@ -232,6 +215,5 @@ export function logEvent(
 			detail === undefined ? null : JSON.stringify(detail),
 		]);
 	} catch {
-		// Auditing is best-effort.
 	}
 }

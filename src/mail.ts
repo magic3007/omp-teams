@@ -1,24 +1,8 @@
-/**
- * Mailbox transport and delivery policy.
- *
- * Messages are rows. A member injects its own undelivered rows into its own
- * session, so delivery never depends on the sender being alive.
- *
- * Delivery policy (verified against `agent-session.ts`):
- *   - `followUp` with `triggerTurn` starts a turn even when idle.
- *   - `followUp`/`steer` without `triggerTurn` only appends to history when
- *     idle, so a task sent that way would never run.
- *   - `nextTurn` without `triggerTurn` persists the message with no turn: the
- *     right shape for passive reports.
- *   - `aside` always starts a turn when idle: reserve it for wakes.
- */
 import type { Database } from "bun:sqlite";
 import { logEvent } from "./db";
 import { shortId } from "./identity";
 
 export type MailKind = "task" | "report" | "ask" | "answer" | "cancel" | "progress" | "ping" | "notice";
-
-/** A `ping` with `fresh` asks the receiver for a freshly written status. */
 
 export type DeliverAs = "steer" | "followUp" | "nextTurn" | "aside";
 
@@ -33,13 +17,11 @@ export interface MailBody {
 	model?: string;
 	paths?: string[];
 	text?: string;
-	/** A `ping` with this flag asks for a freshly written status. */
 	fresh?: boolean;
 }
 
 export interface MailRow {
 	id: string;
-	/** Task this message carries, for task mail; lets delivery mark the task running. */
 	task_id: string | null;
 	from_agent: string;
 	from_seat: string;
@@ -56,18 +38,14 @@ export interface MailRow {
 export interface DeliveryDecision {
 	deliverAs: DeliverAs;
 	triggerTurn: boolean;
-	/** Cancel interrupts an in-flight turn before the message lands. */
 	abortFirst: boolean;
-	/** Passive mail may be merged with other passive mail into one injection. */
 	passive: boolean;
 }
 
 const WAKE_KINDS: Record<string, true> = { task: true, cancel: true, ask: true, notice: true };
 
-/** Turn-ending report statuses must wake a manager; steady progress must not. */
 const WAKE_STATUSES: Record<string, true> = { done: true, failed: true, blocked: true };
 
-/** Whether this message may start a turn on the receiving side. */
 export function wakeFor(kind: MailKind, body: MailBody): boolean {
 	if (WAKE_KINDS[kind]) return true;
 	if (kind === "report" && body.status && WAKE_STATUSES[body.status]) return true;
@@ -76,20 +54,11 @@ export function wakeFor(kind: MailKind, body: MailBody): boolean {
 
 export function decideDelivery(kind: MailKind, wake: boolean, receiverBusy: boolean): DeliveryDecision {
 	if (wake) {
-		// `followUp` + `triggerTurn` is correct in both states: idle starts the turn, busy
-		// queues the message as a follow-up without interrupting the running tool batch.
 		return { deliverAs: "followUp", triggerTurn: true, abortFirst: kind === "cancel" && receiverBusy, passive: false };
 	}
-	// Passive mail never starts a turn; `nextTurn` persists it on an idle member and
-	// queues it for the next turn on a busy one.
 	return { deliverAs: "nextTurn", triggerTurn: false, abortFirst: false, passive: true };
 }
 
-/**
- * Render one message as the text a member sees in its transcript. `preface`
- * frames a task for its receiver's role (a worker's own worktree, a leader's
- * duty to delegate), whatever the task text says.
- */
 export function renderMail(row: MailRow, fromLabel: string, preface?: string): string {
 	const body = safeBody(row.body);
 	const lines: string[] = [];
@@ -136,7 +105,6 @@ export function renderMail(row: MailRow, fromLabel: string, preface?: string): s
 	return lines.join("\n");
 }
 
-/** Parsed body of a mail row; malformed JSON degrades to `{ text }`. */
 export function mailBody(row: MailRow): MailBody {
 	return safeBody(row.body);
 }
@@ -187,7 +155,6 @@ export class Mailer {
 		return id;
 	}
 
-	/** Undelivered messages addressed to this seat, oldest first. */
 	inbox(seat: string, limit = 50): MailRow[] {
 		return this.db
 			.query("SELECT * FROM messages WHERE to_seat = ? AND delivered_at IS NULL ORDER BY created_at, rowid LIMIT ?")
@@ -214,10 +181,6 @@ export class Mailer {
 		tx(ids);
 	}
 
-	/**
-	 * Latest reports addressed to a seat, newest first. Keyed by seat so a manager
-	 * that replaced a crashed predecessor still sees what its reports said.
-	 */
 	recentReports(toSeat: string, limit = 200): MailRow[] {
 		return this.db
 			.query(
@@ -228,12 +191,6 @@ export class Mailer {
 	}
 }
 
-/**
- * Message ids already persisted in a session transcript.
- *
- * Used on session start: a message in history is acknowledged, so a restart
- * never re-delivers it.
- */
 export function persistedMsgIds(entries: Iterable<{ type?: string; customType?: string; details?: unknown }>): string[] {
 	const ids: string[] = [];
 	for (const entry of entries) {

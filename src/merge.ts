@@ -1,11 +1,3 @@
-/**
- * Deterministic merge of a worker commit into the group branch.
- *
- * The integrator worker triggers this through `teams_merge`; the git work itself
- * is fixed code, so a cheap model can drive merges without ever resolving a
- * conflict by hand. A conflict or a failed verification leaves the group
- * worktree exactly as it was before the attempt.
- */
 import { dirtyFiles } from "./worktree";
 
 export interface GitRun {
@@ -27,7 +19,6 @@ export type MergeResult =
 	| { kind: "error"; error: string };
 
 export interface MergeOptions {
-	/** Shell command run in the worktree after a clean merge; failure reverts the merge. */
 	verifyCommand?: string;
 	verifyTimeoutMs?: number;
 }
@@ -65,7 +56,6 @@ export function mergeIntoGroup(worktree: string, sha: string, message: string, o
 			timeout: options.verifyTimeoutMs ?? 600_000,
 		});
 		if (verify.exitCode !== 0) {
-			// The merge commit was created by this call in an integrator-owned worktree: undo it.
 			runGit(worktree, ["reset", "--hard", head]);
 			const output = `${verify.stdout.toString()}\n${verify.stderr.toString()}`.trim();
 			return { kind: "verify-failed", output: tail(output || `exit ${verify.exitCode}`, 40) };

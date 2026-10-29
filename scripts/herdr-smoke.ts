@@ -1,17 +1,3 @@
-/**
- * M1 acceptance harness: builds a real hierarchy inside herdr.
- *
- * What it proves:
- *   - `/teams spawn` puts personal -> project -> group -> workers into panes with
- *     the herdr layout (workspace per repo; tabs `★★ repo leader`,
- *     `★ group leader · <g>`, `☆ workers · <g>`)
- *   - spawned members self-register through `OMP_TEAMS_JOIN`
- *   - every pane carries `display_agent` / state labels through herdr metadata
- *   - workers live in their own worktrees and a done report carries a real SHA
- *   - the status line renders inside the pane
- *
- * Run from inside herdr: `bun run test:herdr`.
- */
 import { join } from "node:path";
 import {
 	aliveCount,
@@ -35,7 +21,6 @@ async function main(): Promise<void> {
 	if (!up) finish(h, "M1");
 	const { personalPane, groupPane, workspaceId } = up;
 
-	// The separator glyph follows the user's symbol preset, so match the segments, not the divider.
 	const statusRow = (): string =>
 		paneTail(personalPane, 40)
 			.split("\n")
@@ -116,7 +101,6 @@ async function main(): Promise<void> {
 		tabLabels.join(" | "),
 	);
 
-	// Labels contain spaces; the seat is a single-token reference.
 	const firstWorker = workerSeats[0];
 	run(
 		h,

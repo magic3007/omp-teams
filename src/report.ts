@@ -1,10 +1,3 @@
-/**
- * The morning report and the audit export.
- *
- * Both answer "what happened while nobody watched": the report is a readable
- * markdown file per day with the state of every branch, the blockers, the spend
- * and the exact merge commands; the audit export is the raw history as JSON.
- */
 import type { Database } from "bun:sqlite";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -18,13 +11,11 @@ export interface ReportInput {
 	budgetUsd: number;
 	spendUsd: number;
 	haltReason: string | null;
-	/** Resolve a project id to its main repository root. */
 	projectRoot: (projectId: string | null) => string | null;
 }
 
 interface GroupLine {
 	project: string;
-	/** Main repository root, where a human runs the merge. */
 	root: string | null;
 	group: string;
 	branch: string;
@@ -132,7 +123,6 @@ function members(db: Database): { label: string; session: string; file: string |
 	return rows.map((row) => ({ label: row.label, session: sessionTag(row.session_id, pool), file: row.session_file }));
 }
 
-/** Markdown of the daily report, and the path it was written to. */
 export function writeDailyReport(input: ReportInput): { markdown: string; path: string } {
 	const { db, home, now } = input;
 	const day = dayKey(now);
@@ -200,11 +190,9 @@ export interface AuditInput {
 	db: Database;
 	home: string;
 	now: number;
-	/** Only rows created at or after this time. */
 	since: number;
 }
 
-/** Dump the team history as JSON, returning the file path and row counts. */
 export function writeAudit(input: AuditInput): { path: string; counts: Record<string, number> } {
 	const { db, home, now, since } = input;
 	const select = (sql: string, ...params: (string | number)[]): unknown[] => db.query(sql).all(...params);
@@ -231,7 +219,6 @@ export function writeAudit(input: AuditInput): { path: string; counts: Record<st
 	return { path, counts };
 }
 
-/** Parse `--hours 24` into a `since` timestamp. */
 export function sinceFromHours(hours: number, now: number): number {
 	return now - Math.max(0, hours) * 60 * 60_000;
 }

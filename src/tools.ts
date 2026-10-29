@@ -1,13 +1,3 @@
-/**
- * `teams_*` tools.
- *
- * Registered `defaultInactive` so a session outside the hierarchy never sees
- * them; registration activates them. `teams_assign` and `teams_report` are the
- * only channels that move work up and down the tree.
- *
- * Each schema is a named const: an inline `z.object(...)` argument infers
- * `unknown` for `params`, a named const infers the real shape.
- */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ASSIGNABLE_KINDS, TASK_DIFFICULTIES, type TaskDifficulty, type TaskKind } from "./config";
 import type { TeamsHost } from "./host";
@@ -16,7 +6,6 @@ import { writeDailyReport } from "./report";
 import { NO_OPEN_TASK } from "./runtime";
 import { type SpawnDeps, spawnGroup, spawnProject, spawnWorker } from "./spawn";
 
-/** Every tool this module registers, in activation order. */
 export const TEAMS_TOOLS = [
 	"teams_assign",
 	"teams_report",
@@ -37,10 +26,6 @@ function text(
 	return { content: [{ type: "text", text: body }], details };
 }
 
-/**
- * Wait until spawned members have registered, so a manager can assign to them
- * right away instead of guessing when they are ready.
- */
 async function waitForMembers(ready: () => AgentRow[] | null, signal: AbortSignal | undefined, timeoutMs = 150_000): Promise<AgentRow[] | null> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -189,7 +174,6 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 				const report = entry.lastReport;
 				const when = report ? `${Math.round((Date.now() - report.at) / 60000)}m ago` : "never";
 				const flat = report?.summary?.replace(/\s+/g, " ") ?? "-";
-				// Keep the overview short; the full report already arrived as a [teams report] message.
 				const summary = flat.length > 400 ? `${flat.slice(0, 400)}… (shortened here; the full report is in its [teams report] message)` : flat;
 				return `${entry.agent.label} | session ${entry.session} | ${entry.current ? `▶ ${entry.current.id}` : "idle"} | last: ${report?.status ?? "-"} ${when} | ${summary}`;
 			});

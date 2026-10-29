@@ -1,9 +1,3 @@
-/**
- * Membership registry: one row per member session, one live holder per seat.
- *
- * The registry is the single source of truth for the hierarchy. Herdr layout,
- * status lines and pane titles are projections of these rows.
- */
 import type { Database } from "bun:sqlite";
 import { logEvent } from "./db";
 import {
@@ -47,16 +41,9 @@ export interface RegisterInput {
 	projectId?: string | null;
 	projectName?: string | null;
 	group?: string | null;
-	/** Worker slot this session occupies. */
 	slotId?: string | null;
-	/** Slot index, used for the worker label. */
 	index?: number;
-	/** Integrator slots get a distinct label. */
 	slotKind?: "worker" | "integrator";
-	/**
-	 * Take the seat even when a live holder has it: `/teams <role> --force` (a human
-	 * handoff), or a respawn in the same herdr pane (the previous process exited).
-	 */
 	force?: boolean;
 	takeoverPane?: string | null;
 }
@@ -73,11 +60,8 @@ export interface GroupRow {
 	tab_id: string | null;
 	lead_pane_id: string | null;
 	created_at: number;
-	/** Group lead stopped handing out work; workers do not claim. */
 	paused: number;
-	/** Why it is paused: `halt`, `budget`, `blocked-rate`, or null for a human pause. */
 	paused_reason: string | null;
-	/** Group-branch head the integrator last wrote; a different head means someone else rewrote the branch. */
 	head_sha: string | null;
 }
 
@@ -110,7 +94,6 @@ export class Registry {
 		);
 	}
 
-	/** The latest row this session ever held, whatever its status. */
 	lastRowOfSession(sessionId: string): AgentRow | null {
 		return (
 			(this.db
@@ -119,7 +102,6 @@ export class Registry {
 		);
 	}
 
-	/** Mark every member whose heartbeat is older than the deadline as dead. */
 	sweepDead(): AgentRow[] {
 		const cutoff = this.now() - this.options.deadAfterMs;
 		const stale = this.db
@@ -131,13 +113,6 @@ export class Registry {
 		return stale;
 	}
 
-	/**
-	 * Bring back a member that was marked dead while its process was still
-	 * running (a stalled event loop, a slow tool), or that is resumed with
-	 * `omp -r`. Refused when the member left on purpose or another session holds
-	 * the seat now. A resumed session may run in another pane or directory; pass
-	 * them so presence goes to the right place.
-	 */
 	revive(agentId: string, where: { paneId?: string | null; cwd?: string } = {}): AgentRow | null {
 		const row = this.byId(agentId);
 		if (!row || row.status !== "dead") return null;
@@ -149,7 +124,6 @@ export class Registry {
 				[this.now(), where.paneId ?? null, where.cwd ?? null, agentId],
 			);
 		} catch {
-			// Another session won the seat between the check and the update.
 			return null;
 		}
 		logEvent(this.db, "revive", { seat: row.seat }, agentId, this.now());
@@ -165,16 +139,8 @@ export class Registry {
 		logEvent(this.db, `status:${status}`, undefined, agentId, this.now());
 	}
 
-	/**
-	 * Create or refresh this session's membership.
-	 *
-	 * Re-registering the same session for the same seat updates the row. A seat
-	 * held by a live member is a conflict; a seat whose holder stopped
-	 * heartbeating is taken over.
-	 */
 	register(input: RegisterInput): RegisterResult {
 		const now = this.now();
-		// Reclaim seats of members that stopped heartbeating before judging conflicts.
 		this.sweepDead();
 		const parent = parentSeatFor(input.role, input.projectId, input.group);
 		if (parent.seat) {
@@ -305,7 +271,6 @@ export class Registry {
 			.all(seat) as AgentRow[];
 	}
 
-	/** Workers that share this worker's group: mutual visibility inside a group. */
 	peersOf(agent: AgentRow): AgentRow[] {
 		if (agent.role !== "worker") return [];
 		return this.db
@@ -317,7 +282,6 @@ export class Registry {
 			.all(agent.project_id, agent.group_name, agent.id) as AgentRow[];
 	}
 
-	/** Everything this member may address: itself, its parent, its children, its peers. */
 	visibleTo(agent: AgentRow): AgentRow[] {
 		const rows = [agent];
 		if (agent.parent_seat) {
@@ -328,7 +292,6 @@ export class Registry {
 		return rows;
 	}
 
-	/** Resolve `parent`, an agent id/prefix, a seat, or a label among what `viewer` may address. */
 	resolveRef(viewer: AgentRow, ref: string): AgentRow | null {
 		const trimmed = ref.trim();
 		if (!trimmed) return null;
@@ -347,10 +310,6 @@ export class Registry {
 		return prefixed.length === 1 ? (prefixed[0] as AgentRow) : null;
 	}
 
-	/**
-	 * A group by name, machine-wide. Null when no group has that name; the
-	 * `ambiguous` flag says several projects do, so the caller must qualify it.
-	 */
 	groupByName(name: string): { group: GroupRow; ambiguous: boolean } | null {
 		const rows = this.db.query("SELECT * FROM groups WHERE name = ?").all(name) as GroupRow[];
 		const first = rows[0];
@@ -358,7 +317,6 @@ export class Registry {
 		return { group: first, ambiguous: rows.length > 1 };
 	}
 
-	/** Every registered project, for rebuilds and reports. */
 	allProjects(): { id: string; name: string; root: string }[] {
 		return this.db.query("SELECT id, name, root FROM projects ORDER BY name").all() as {
 			id: string;
@@ -388,7 +346,6 @@ export class Registry {
 		);
 	}
 
-	/** Point a member at its pane (a resumed session may run somewhere else). */
 	setPane(agentId: string, paneId: string | null, cwd?: string): void {
 		this.db.run("UPDATE agents SET pane_id = ?, cwd = COALESCE(?, cwd) WHERE id = ?", [paneId, cwd ?? null, agentId]);
 	}
@@ -437,7 +394,6 @@ export class Registry {
 		]);
 	}
 
-	/** Every group, machine-wide (the brake needs all of them, not one project). */
 	allGroups(): GroupRow[] {
 		return this.db.query("SELECT * FROM groups ORDER BY project_id, name").all() as GroupRow[];
 	}
@@ -446,7 +402,6 @@ export class Registry {
 		this.db.run("UPDATE groups SET head_sha = ? WHERE project_id = ? AND name = ?", [sha, projectId, name]);
 	}
 
-	/** Create or update a group. The head is recorded only on first sight; the integrator owns it afterwards. */
 	upsertGroup(input: {
 		projectId: string;
 		name: string;
@@ -464,7 +419,6 @@ export class Registry {
 		return this.group(input.projectId, input.name) as GroupRow;
 	}
 
-	/** Whole tree of live members, ordered top-down. */
 	allAlive(): AgentRow[] {
 		return this.db
 			.query(

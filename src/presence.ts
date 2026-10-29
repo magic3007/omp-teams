@@ -1,13 +1,3 @@
-/**
- * Presence: what a member shows in the status line, the manager widget, and
- * the herdr pane metadata.
- *
- * All three are projections of the registry, recomputed on every poll tick and
- * only re-sent when the text changes. The status line and widget are built as
- * segments (icon + text + tone) and painted with the active omp theme, so they
- * follow the user's symbol preset (nerd font, unicode or ascii) and colours,
- * like omp's own status bar.
- */
 import type { SymbolKey } from "@oh-my-pi/pi-tui/theme/symbols";
 import { displayName, RANK_GLYPH } from "./identity";
 import type { AgentRow } from "./registry";
@@ -32,15 +22,10 @@ export interface PresenceInput {
 	parentAlive: boolean;
 	currentTaskId?: string | null;
 	currentTaskTitle: string | null;
-	/** Set while a human is driving this worker pane. */
 	manual: boolean;
-	/** The member's branch: the slot branch for a worker, the group branch for a lead or the integrator. */
 	branch?: string | null;
-	/** The member's group stopped handing out work. */
 	paused?: boolean;
-	/** The whole team is halted by a human. */
 	halted?: boolean;
-	/** Today's spend reached the budget; nothing new starts. */
 	budgetSpent?: boolean;
 	integrator?: boolean;
 }
@@ -48,24 +33,19 @@ export interface PresenceInput {
 export type Tone = "accent" | "muted" | "dim" | "success" | "warning" | "error" | "branch";
 
 export interface Segment {
-	/** Theme symbol, drawn in the user's preset (nerd, unicode, ascii). */
 	icon?: SymbolKey;
-	/** Literal glyph, used for the rank stars that must look the same everywhere. */
 	glyph?: string;
 	text: string;
 	tone: Tone;
 	bold?: boolean;
 }
 
-/** Paints segments; the extension backs it with the omp theme, tests with plain text. */
 export interface Painter {
 	icon(key: SymbolKey): string;
 	paint(tone: Tone, text: string, bold?: boolean): string;
-	/** Drawn between segments. omp collapses runs of spaces in status text, so segments need a visible divider. */
 	separator(): string;
 }
 
-/** Unicode stand-ins matching omp's unicode symbol preset, for uncoloured output. */
 const PLAIN_ICONS: Partial<Record<SymbolKey, string>> = {
 	"icon.branch": "⑂",
 	"icon.pause": "⏸",
@@ -92,7 +72,6 @@ function plural(count: number, word: string): string {
 	return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/** Status line segments, role-specific. Identity first, then scope, then what needs attention. */
 export function statusSegments(input: PresenceInput): Segment[] {
 	const { agent, counts } = input;
 	const segments: Segment[] = [{ glyph: RANK_GLYPH[agent.role], text: displayName(agent.label), tone: "accent", bold: true }];
@@ -102,7 +81,6 @@ export function statusSegments(input: PresenceInput): Segment[] {
 	}
 
 	switch (agent.role) {
-		// Head counts carry the rank glyph of the level they count, so the line reads top-down.
 		case "personal":
 			segments.push({ glyph: RANK_GLYPH.project, text: plural(counts.projects, "repo leader"), tone: "muted" });
 			segments.push({ glyph: RANK_GLYPH.group, text: plural(counts.groups, "group leader"), tone: "muted" });
@@ -160,12 +138,10 @@ export function renderSegments(segments: Segment[], painter: Painter): string {
 		.join(` ${painter.separator()} `);
 }
 
-/** Status line, one line, role-specific shape. */
 export function statusLine(input: PresenceInput, painter: Painter = PLAIN_PAINTER): string {
 	return renderSegments(statusSegments(input), painter);
 }
 
-/** Pane state labels, keyed by herdr's agent status vocabulary. Plain text: herdr draws them. */
 export function paneStateLabels(input: PresenceInput): Record<string, string> {
 	const { agent, counts } = input;
 	const task = input.currentTaskTitle ? truncate(input.currentTaskTitle, 34) : null;
@@ -185,7 +161,6 @@ export function paneStateLabels(input: PresenceInput): Record<string, string> {
 	};
 }
 
-/** Pane title: stable identity plus the live task. */
 export function paneTitle(input: PresenceInput): string {
 	const task = input.currentTaskTitle ? `: ${truncate(input.currentTaskTitle, 36)}` : "";
 	return `${input.agent.label}${task}`;
@@ -193,7 +168,6 @@ export function paneTitle(input: PresenceInput): string {
 
 export interface WidgetEntry {
 	agent: AgentRow;
-	/** Short omp session id, unique among live members. */
 	session: string;
 	current: { id: string; title: string } | null;
 	lastReport: { status: string; summary: string; at: number } | null;
@@ -205,10 +179,6 @@ function age(now: number, at: number): string {
 	return `${Math.floor(minutes / 60)}h${minutes % 60 ? `${minutes % 60}m` : ""}`;
 }
 
-/**
- * Widget rows for a manager: one row per direct report, never more than `max`
- * rows in total (omp draws at most ten), the last one counting the overflow.
- */
 export function widgetLines(entries: WidgetEntry[], now: number, painter: Painter = PLAIN_PAINTER, max = 10): string[] {
 	if (entries.length === 0) return [];
 	const width = Math.min(18, Math.max(...entries.map((entry) => displayName(entry.agent.label).length)));

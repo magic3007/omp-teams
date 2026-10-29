@@ -1,14 +1,3 @@
-/**
- * omp-teams extension entry point.
- *
- * Wires the registry, mailbox, task queue, tool policy, role prompts and herdr
- * presence into one omp session. A session that never registers stays
- * untouched: it gets no extra tools, no prompt addendum and no panes.
- *
- * Every member runs one poll loop:
- *   heartbeat → sweep dead → (re)read self → presence → deliver mail →
- *   managers: patrol (every patrol_minutes) / workers: claim, rotate, retire
- */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
@@ -47,7 +36,6 @@ const TONE_COLORS: Record<Tone, ThemeColor> = {
 	branch: "statusLineGitClean",
 };
 
-/** Paint presence segments with the active theme: its symbol preset and its colours. */
 function themePainter(ctx: ExtensionContext): Painter {
 	const theme = ctx.ui.theme;
 	return {
@@ -56,7 +44,6 @@ function themePainter(ctx: ExtensionContext): Painter {
 			const colored = theme.fg(TONE_COLORS[tone], text);
 			return bold ? theme.bold(colored) : colored;
 		},
-		// The same thin divider omp's own status bar draws between segments.
 		separator: () => theme.fg("statusLineSep", theme.symbol("sep.powerlineThin")),
 	};
 }
@@ -85,8 +72,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		me: () => self,
 		refresh: () => {
 			self = sessionId ? runtime.me(sessionId) : null;
-			// Registration happens after session start, so the poll loop has to begin here
-			// the first time this session turns out to be a member.
 			if (self && activeCtx && !timer) startTimer(activeCtx);
 			return self;
 		},
@@ -98,7 +83,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			else console.error(`[omp-teams] ${message}`);
 		},
 		notifyHerdr: async (title, body) => {
-			// Best effort: the desktop notification is a convenience, never a dependency.
 			if (!herdrAvailable()) return;
 			Bun.spawnSync(["herdr", "notification", "show", title, "--body", body], { stdout: "ignore", stderr: "ignore" });
 		},
@@ -109,7 +93,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		return agent.role === "worker" && runtime.slotOf(agent)?.kind === "integrator";
 	}
 
-	/** End this process for good: tell the launcher loop not to restart, then shut down. */
 	function stopMember(): void {
 		if (stopping) return;
 		stopping = true;
@@ -118,7 +101,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		activeCtx?.shutdown();
 	}
 
-	/** End this session but let the launcher start a fresh one in the same slot. */
 	function rotateMember(reason: string): void {
 		if (stopping || !process.env.OMP_TEAMS_STOP) return;
 		stopping = true;
@@ -144,18 +126,11 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			logEvent(db, "tools:policy", { role: self.role, integrator: isIntegrator(self), active }, self.id);
 			return;
 		}
-		// Workers keep execution tools; the built-in `ask` tool is removed because it waits
-		// for a human and would hang an unattended worker (teams_ask replaces it).
 		const active = [...base, ...TEAMS_TOOLS.filter((name) => !base.includes(name))].filter((name) => name !== "ask");
 		await pi.setActiveTools(active);
 		logEvent(db, "tools:policy", { role: self.role, active }, self.id);
 	}
 
-	/**
-	 * Switch a worker to the model the task was routed to, before the task lands.
-	 * Leaders keep the leader model. A busy worker keeps its model: the switch
-	 * would apply to the task it is still running.
-	 */
 	async function applyTaskModel(ctx: ExtensionContext, rows: MailRow[]): Promise<void> {
 		if (self?.role !== "worker" || !ctx.isIdle()) return;
 		const task = rows.find((row) => row.kind === "task");
@@ -177,11 +152,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	/**
-	 * Answer a `fresh` ping with one ephemeral turn: a short, current status,
-	 * sent back as a passive progress report. Nothing is appended to the session
-	 * history, and the turn keeps the prompt cache.
-	 */
 	async function answerFreshStatus(ctx: ExtensionContext, me: AgentRow, row: MailRow): Promise<void> {
 		if (!ctx.runEphemeralTurn) return;
 		const task = runtime.currentTask(me);
@@ -201,7 +171,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	/** Report this session's spend to the shared ledger, throttled to every 30s. */
 	function recordSpendTick(ctx: ExtensionContext, me: AgentRow): void {
 		const now = Date.now();
 		if (now - lastSpendAt < 30_000) return;
@@ -218,7 +187,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		if (delivering) return;
 		const me = self;
 		if (!me) return;
-		// A human driving a worker pane gets no team mail until /teams release.
 		if (me.role === "worker" && runtime.slotOf(me)?.manual === 1) return;
 		delivering = true;
 		try {
@@ -233,7 +201,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			const slot = me.role === "worker" ? runtime.slotOf(me) : null;
 			const preface = taskPreface(me, slot?.kind === "worker" ? { worktree: slot.worktree, branch: slot.branch } : null);
 			for (const row of rows.filter((candidate) => candidate.wake === 1)) {
-				// The first wake starts a turn; the rest fold into it as follow-ups.
 				const busy = !idle || claimedTurn;
 				const decision = decideDelivery(row.kind, true, busy);
 				if (decision.abortFirst) ctx.abort();
@@ -271,10 +238,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	/**
-	 * Worker lifecycle between tasks: claim the next queued task, or leave the
-	 * slot (retire) or restart it fresh (rotate) once the current task is over.
-	 */
 	function workerTick(ctx: ExtensionContext, me: AgentRow): void {
 		if (stopping || !ctx.isIdle()) return;
 		if (runtime.currentTask(me)) return;
@@ -306,7 +269,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		runtime.patrol(me);
 	}
 
-	/** Status line, manager widget and herdr pane metadata for the current member. */
 	function renderPresence(ctx: ExtensionContext): void {
 		const me = self;
 		if (!me) return;
@@ -368,7 +330,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 	function startTimer(ctx: ExtensionContext): void {
 		if (timer) return;
 		const period = runtime.configFor(runtime.registry.projectRoot(self?.project_id ?? "") ?? undefined).poll_ms;
-		// First patrol one period after start, not immediately: the tree may still be forming.
 		lastPatrolAt = Date.now();
 		timer = ctx.setInterval(() => {
 			const me = self;
@@ -376,11 +337,8 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			runtime.registry.heartbeat(me.id);
 			recordSpendTick(ctx, me);
 			runtime.registry.sweepDead();
-			// Still alive but marked dead (a long stall): take the seat back if nobody else holds it.
 			self = runtime.me(sessionId ?? "") ?? runtime.registry.revive(me.id);
 			if (!self) {
-				// Another session holds the seat now, or this member left: stop acting. Clear the
-				// timer so a later registration starts exactly one new loop.
 				if (timer) ctx.clearTimer(timer);
 				timer = null;
 				return;
@@ -395,7 +353,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}, Math.max(500, period));
 	}
 
-	/** A spawned member carries its identity in the environment, not through a command. */
 	async function autoJoin(ctx: ExtensionContext): Promise<void> {
 		const raw = process.env.OMP_TEAMS_JOIN;
 		if (!raw) return;
@@ -414,7 +371,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 				projectName: project?.name ?? null,
 				group: join.group ?? null,
 				slotId: join.slot ?? null,
-				// The launcher restarted us in the same pane: the previous holder is this pane's old process.
 				takeoverPane: currentPaneId(),
 			},
 			project ? { project } : {},
@@ -436,7 +392,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		sessionId = ctx.sessionManager.getSessionId();
 		if (!baselineTools) baselineTools = pi.getActiveTools();
 		self = runtime.me(sessionId);
-		// `omp -r` on a member that crashed: its row went dead meanwhile; take the seat back if it is free.
 		if (!self) {
 			const previous = runtime.registry.lastRowOfSession(sessionId);
 			if (previous?.status === "dead") self = runtime.registry.revive(previous.id, { paneId: currentPaneId(), cwd: ctx.cwd });
@@ -444,11 +399,8 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		if (!self) await autoJoin(ctx);
 		if (!self) return;
 		runtime.mailer.markAcked(persistedMsgIds(ctx.sessionManager.getBranch()));
-		// Work the previous holder of this seat owned (crash, rotation) is re-mailed here.
 		runtime.inheritOpenTasks(self);
 		await applyToolPolicy();
-		// Mail is delivered by the poll loop, not here: during session start the RPC bridge
-		// still defers agent-initiated turns, so a wake sent now would be queued instead of run.
 		startTimer(ctx);
 	});
 
@@ -467,7 +419,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("input", async (event) => {
-		// A human typing into a worker pane takes it over until /teams release.
 		const me = self;
 		if (!me || me.role !== "worker" || event.source !== "interactive") return;
 		if (event.text.trim().startsWith("/teams")) return;
@@ -478,7 +429,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	/** The worker's own worktree and branch, and the team paths it must leave alone. */
 	function workerBounds(me: AgentRow): WorkerBounds | null {
 		const slot = runtime.slotOf(me);
 		if (!slot || !me.project_id) return null;
@@ -506,9 +456,6 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
-		// No explicit status change: the missing heartbeat (or the next holder's takeover)
-		// marks a member dead, so a crash and a clean exit are treated identically.
 		self = null;
 	});
 }
-

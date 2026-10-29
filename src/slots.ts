@@ -1,10 +1,3 @@
-/**
- * Worker slots.
- *
- * A slot is a durable seat: one worktree, one branch, one herdr pane slot. The
- * session living in it can be replaced (crash, rotation) while the seat keeps
- * its identity, so mail and tasks addressed to the slot survive.
- */
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 
@@ -25,9 +18,7 @@ export interface SlotRow {
 	session_id: string | null;
 	status: SlotStatus;
 	created_at: number;
-	/** A human is driving the pane: no claims, no mail injection. */
 	manual: number;
-	/** Tasks completed by the current session, for rotation. */
 	tasks_done: number;
 }
 
@@ -42,7 +33,6 @@ export class Slots {
 		private readonly now: () => number = Date.now,
 	) {}
 
-	/** Every slot, for rebuilds and reports. */
 	all(): SlotRow[] {
 		return this.db.query("SELECT * FROM slots ORDER BY project_id, group_name, kind, index_no").all() as SlotRow[];
 	}
@@ -59,7 +49,6 @@ export class Slots {
 			.all(projectId, group, kind) as SlotRow[];
 	}
 
-	/** Create or return the slot for this (group, kind, index). */
 	ensure(input: {
 		projectId: string | null;
 		group: string;
@@ -87,7 +76,6 @@ export class Slots {
 		if (input.tabId !== undefined) this.db.run("UPDATE slots SET tab_id = ? WHERE id = ?", [input.tabId, slotId]);
 	}
 
-	/** A new session took the slot: fresh rotation counter, retirement requests survive. */
 	occupy(slotId: string, agentId: string, sessionId: string): void {
 		this.db.run(
 			`UPDATE slots SET agent_id = ?, session_id = ?, tasks_done = 0, manual = 0,
@@ -109,7 +97,6 @@ export class Slots {
 		this.db.run("UPDATE slots SET tasks_done = tasks_done + 1 WHERE id = ?", [slotId]);
 	}
 
-	/** Worker slots not yet retired, machine-wide: what `limits.max_workers_total` caps. */
 	countActiveWorkers(): number {
 		const row = this.db
 			.query("SELECT COUNT(*) AS n FROM slots WHERE kind = 'worker' AND status != 'retired'")
@@ -121,7 +108,6 @@ export class Slots {
 		return this.forGroup(projectId, group, "integrator")[0] ?? null;
 	}
 
-	/** Slot of the given kind recorded for a working directory, if any. */
 	byWorktree(path: string, kind: SlotKind = "worker"): SlotRow | null {
 		return (
 			(this.db

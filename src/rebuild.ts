@@ -1,11 +1,3 @@
-/**
- * `/teams resume`: put the machine back together after herdr restarted.
- *
- * The registry is the source of truth; herdr state (workspaces, tabs, panes) is
- * not. Rebuild reuses whatever still exists and recreates only what is gone:
- * a missing workspace, a missing tab, or a pane whose process is no longer
- * there, in which case the member's launcher script is run again in its pane.
- */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Herdr } from "./herdr";
@@ -20,7 +12,6 @@ export interface RebuildDeps {
 	home: string;
 }
 
-/** Poll the registry until `seat` is held, or give up. */
 export async function waitForSeat(runtime: TeamsRuntime, seat: string, timeoutMs: number): Promise<AgentRow | null> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -55,7 +46,6 @@ function launcher(deps: RebuildDeps, tag: string): string | null {
 	return existsSync(path) ? path : null;
 }
 
-/** Run a member's launcher in a pane, so the launcher loop takes over from there. */
 function relaunch(deps: RebuildDeps, paneId: string, tag: string): boolean {
 	const script = launcher(deps, tag);
 	if (!script) return false;
@@ -71,10 +61,6 @@ export interface RebuildResult {
 	missing: string[];
 }
 
-/**
- * Rebuild every project, group and member that herdr lost. Members whose pane
- * still exists are left alone: their launcher restarts the process by itself.
- */
 export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 	const { runtime, herdr } = deps;
 	const result: RebuildResult = { workspacesCreated: 0, tabsCreated: 0, panesCreated: 0, relaunched: [], missing: [] };
@@ -123,7 +109,6 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 		return created.value.paneId;
 	};
 
-	// 1. Project leads.
 	const projects = runtime.registry.allProjects();
 	for (const project of projects) {
 		const workspaceId = ensureWorkspace(project.id, project.root, project.name);
@@ -146,7 +131,6 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 		}
 	}
 
-	// 2. Group leads and their tabs.
 	const groups = runtime.registry.allGroups();
 	for (const group of groups) {
 		const workspaceId = ensureWorkspace(group.project_id, runtime.registry.projectRoot(group.project_id) ?? group.worktree, group.project_id);
@@ -174,7 +158,6 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 		}
 	}
 
-	// 3. Worker and integrator slots.
 	const slots = runtime.slots.all();
 	for (const slot of slots) {
 		if (slot.status === "retired") continue;
@@ -210,7 +193,6 @@ function workerTabLabel(slot: SlotRow, group: GroupRow): string {
 		: `${RANK_GLYPH.worker} workers · ${group.name}`;
 }
 
-/** One line a human can read after `/teams resume`. */
 export function describeRebuild(result: RebuildResult): string {
 	const parts: string[] = [];
 	if (result.workspacesCreated > 0) parts.push(`${result.workspacesCreated} workspace(s) recreated`);

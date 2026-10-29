@@ -19,7 +19,6 @@ const bash = (command: string, cwd?: string, within: WorkerBounds = bounds) =>
 
 describe("worker guard", () => {
 	test("the git commands that rewrote a group branch in testing are blocked", () => {
-		// Seen verbatim in a live run: a worker force-moved the group branch from the main repository.
 		expect(bash("cd /src/repo\ngit branch -f teams/feat-x f510b6b")).toContain("move, delete or copy branches");
 		expect(bash("git checkout -b worker/colors main")).toContain("create or switch branches");
 		expect(bash("cd /src/repo && git worktree add /tmp/int-wt -B team/x main")).toContain("add or remove worktrees");
@@ -84,7 +83,6 @@ describe("manager and integrator guards", () => {
 
 describe("worker branch creation", () => {
 	test("creating a branch is blocked; listing branches is not", () => {
-		// Seen in a live run: a worker created `team/files` because its task named that branch.
 		expect(bash("git branch team/files")).toContain("create branches");
 		expect(bash("cd /teams/wt/p-1/feat-x/w1 && git branch team/files HEAD")).toContain("create branches");
 		expect(bash("git branch")).toBeNull();
@@ -97,7 +95,6 @@ describe("worker branch creation", () => {
 
 describe("read-only git outside the worktree", () => {
 	test("inspection of the main repository and other worktrees is allowed", () => {
-		// Seen blocked in a live run: verification workers reading the delivered branch.
 		expect(bash("cd /src/repo && git diff --name-status $(git merge-base main teams/feat-x) teams/feat-x")).toBeNull();
 		expect(bash("git -C /src/repo merge-tree main teams/feat-x")).toBeNull();
 		expect(bash("git -C /src/repo branch -a")).toBeNull();
@@ -158,7 +155,6 @@ describe("the directory a segment really runs in", () => {
 	});
 
 	test("cd into the main repository through the common dir is foreign", () => {
-		// Seen in a live run: the worker left its worktree by computing the shared git dir.
 		expect(bash("cd $(git rev-parse --git-common-dir)/.. && git merge teams-w/feat-x/w1")).toContain("/src/repo");
 	});
 

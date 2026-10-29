@@ -1,42 +1,22 @@
-/**
- * Guards: the conditions under which the team must stop starting new work.
- *
- * Three brakes, all evaluated from the shared database so every member applies
- * the same answer:
- *   - `halt`: a human stopped the team (`/teams halt`).
- *   - `budget`: today's spend reached `guards.budget.daily_usd`.
- *   - `window`: the local clock is outside `guards.window` (or before
- *     `guards.quiet_until`).
- *
- * A brake stops new work: no assignment, no spawn, no worker claim. How much
- * each member has spent is self-reported through `ctx.sessionManager.
- * getUsageStatistics().cost`, upserted per session and day, because the model
- * prices live in the session, not in this extension.
- */
 import type { Database } from "bun:sqlite";
 import type { TeamsConfig } from "./config";
 
 export interface GuardState {
 	halted: boolean;
 	haltReason: string | null;
-	/** Today's spend, as reported by members. */
 	spendToday: number;
 	budgetUsd: number;
 	frozen: boolean;
-	/** Local clock is outside the allowed window, or before `quiet_until`. */
 	outsideWindow: boolean;
-	/** Why new work must not start, or null when it may. */
 	stopReason: string | null;
 }
 
 const HALT_KEY = "halted";
 
-/** Money for messages: cents are too coarse for a small budget, so small sums keep four digits. */
 export function formatUsd(amount: number): string {
 	return amount >= 1 ? amount.toFixed(2) : amount.toFixed(4);
 }
 
-/** Local calendar day of `at`, `YYYY-MM-DD`; spend is summed per day. */
 export function dayKey(at: number): string {
 	const date = new Date(at);
 	const month = `${date.getMonth() + 1}`.padStart(2, "0");
@@ -53,7 +33,6 @@ function minutesOfDay(hhmm: string): number | null {
 	return hours * 60 + minutes;
 }
 
-/** Whether `now` is inside the configured working window (both ends inclusive). */
 export function insideWindow(config: TeamsConfig, now: number): boolean {
 	const date = new Date(now);
 	const quietUntil = config.guards.quiet_until ? Date.parse(config.guards.quiet_until) : Number.NaN;
@@ -64,7 +43,6 @@ export function insideWindow(config: TeamsConfig, now: number): boolean {
 	const end = minutesOfDay(window.end);
 	if (start === null || end === null) return true;
 	const minute = date.getHours() * 60 + date.getMinutes();
-	// A window like 22:00–06:00 wraps around midnight.
 	return start <= end ? minute >= start && minute <= end : minute >= start || minute <= end;
 }
 
@@ -93,7 +71,6 @@ export function spendToday(db: Database, at = Date.now()): number {
 	return row?.total ?? 0;
 }
 
-/** USD per million tokens for `model`: exact match, then `provider/*`, then `*`. */
 export function priceFor(config: TeamsConfig, model: string | null): { input: number; output: number } {
 	const prices = config.guards.budget.prices;
 	if (!model) return prices["*"] ?? { input: 0, output: 0 };
@@ -101,7 +78,6 @@ export function priceFor(config: TeamsConfig, model: string | null): { input: nu
 	return prices[model] ?? (provider ? prices[`${provider}*`] : undefined) ?? prices["*"] ?? { input: 0, output: 0 };
 }
 
-/** What a session's tokens are worth when the provider reports no cost. */
 export function estimateCost(config: TeamsConfig, model: string | null, tokens: { input: number; output: number }): number {
 	const price = priceFor(config, model);
 	return (tokens.input * price.input + tokens.output * price.output) / 1_000_000;
@@ -112,20 +88,12 @@ export interface SpendInput {
 	agentId: string | null;
 	seat: string;
 	model: string | null;
-	/** Cost the session itself reports; 0 when the provider has no price table. */
 	cost: number;
 	tokens?: { input: number; output: number };
-	/** Used to price tokens when `cost` is 0. */
 	config?: TeamsConfig;
 	at?: number;
 }
 
-/**
- * Record a member's session spend; the row keeps the highest figures seen for
- * that session and day. A reported cost wins; otherwise the tokens are priced
- * with the configured table, so the budget still has a meaning on providers
- * that report no price at all.
- */
 export function recordSpend(db: Database, input: SpendInput): number {
 	const at = input.at ?? Date.now();
 	const tokens = input.tokens ?? { input: 0, output: 0 };
@@ -142,7 +110,6 @@ export function recordSpend(db: Database, input: SpendInput): number {
 	return cost;
 }
 
-/** Current brake state. `config` decides the limits; the database holds halt and spend. */
 export function guardState(db: Database, config: TeamsConfig, now = Date.now()): GuardState {
 	const halted = haltReason(db);
 	const spend = spendToday(db, now);

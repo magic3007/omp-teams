@@ -1,11 +1,3 @@
-/**
- * `/teams tree`: the hierarchy below a member, with every omp session id.
- *
- * The tree is built from the registry (live members only), rendered either as
- * text (for non-interactive modes and tests) or as an interactive overlay like
- * omp's own `/tree`: arrow keys move, the footer shows the selected member's
- * full session id, session file, pane and model, Esc closes.
- */
 import type { ExtensionCommandContext } from "@oh-my-pi/pi-coding-agent";
 import { displayName, RANK_GLYPH, sessionTag } from "./identity";
 import { type Painter, PLAIN_PAINTER, truncate } from "./presence";
@@ -15,14 +7,12 @@ import type { TeamsRuntime } from "./runtime";
 
 export interface TeamTreeNode {
 	agent: AgentRow;
-	/** Short omp session id, unique among live members; `omp -r <session>` resumes it. */
 	session: string;
 	task: TaskRow | null;
 	integrator: boolean;
 	children: TeamTreeNode[];
 }
 
-/** Live members under `root` (or the whole machine when `root` is null), top-down. */
 export function buildTeamTree(runtime: TeamsRuntime, root: AgentRow | null): TeamTreeNode[] {
 	const alive = runtime.registry.allAlive();
 	const pool = alive.map((row) => row.session_id);
@@ -48,7 +38,6 @@ export function buildTeamTree(runtime: TeamsRuntime, root: AgentRow | null): Tea
 export interface TreeRowView {
 	node: TeamTreeNode;
 	depth: number;
-	/** For each ancestor level: whether that ancestor was the last of its siblings. */
 	ancestorsLast: boolean[];
 	isLast: boolean;
 }
@@ -76,7 +65,6 @@ const PLAIN_TREE: TreeGlyphs = { vertical: "│", branch: "├─", last: "└�
 
 function gutter(row: TreeRowView, glyphs: TreeGlyphs): string {
 	if (row.depth === 0) return "";
-	// The root level has no connector; every deeper level draws one.
 	const ancestors = row.ancestorsLast
 		.slice(1)
 		.map((last) => (last ? "   " : `${glyphs.vertical}  `))
@@ -94,7 +82,6 @@ function rowBody(node: TeamTreeNode, painter: Painter, selfId: string | null): s
 	return `${name}${you}  ${state}  ${session}`;
 }
 
-/** Text form of the tree, one line per member. */
 export function treeText(
 	nodes: TeamTreeNode[],
 	options: { painter?: Painter; glyphs?: TreeGlyphs; selfId?: string | null; paths?: boolean } = {},
@@ -113,7 +100,6 @@ export function treeText(
 	return lines;
 }
 
-/** Details of one member, for the overlay footer. */
 export function memberDetails(agent: AgentRow): string[] {
 	return [
 		`session  ${agent.session_id}`,
@@ -125,7 +111,6 @@ export function memberDetails(agent: AgentRow): string[] {
 
 const MAX_VISIBLE_ROWS = 18;
 
-/** Interactive tree overlay, in the style of omp's `/tree`. Resolves when closed. */
 export async function showTreeOverlay(
 	ctx: ExtensionCommandContext,
 	nodes: TeamTreeNode[],
@@ -146,7 +131,6 @@ export async function showTreeOverlay(
 		};
 		const glyphs: TreeGlyphs = { vertical: theme.tree.vertical, branch: theme.tree.branch, last: theme.tree.last };
 		const fit = (line: string, width: number): string => {
-			// Clip by visible width; ANSI codes are zero-width.
 			let visible = 0;
 			let out = "";
 			for (let i = 0; i < line.length; i++) {

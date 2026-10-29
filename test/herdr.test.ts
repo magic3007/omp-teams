@@ -126,7 +126,6 @@ describe("herdr adapter", () => {
 
 	test("presence updates do not block on herdr", async () => {
 		new Herdr().reportPresence("wXX:p1", { displayAgent: "w1·feat-x" }, "w1·feat-x: task");
-		// The calls land asynchronously; wait for the stub to record both.
 		for (let i = 0; i < 40 && recordedCalls().length < 2; i++) await Bun.sleep(25);
 		const calls = recordedCalls().join("\n");
 		expect(calls).toContain("pane report-metadata wXX:p1 --source omp-teams --display-agent w1·feat-x");
@@ -147,7 +146,6 @@ describe("herdr adapter", () => {
 	});
 
 	test("a herdr error is surfaced, not swallowed", () => {
-		// `workspace close` is not stubbed, so the stub answers with an error envelope.
 		const result = new Herdr().closeWorkspace("wXX");
 		expect(result.ok).toBe(false);
 		if (result.ok) throw new Error("unreachable");

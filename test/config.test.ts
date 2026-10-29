@@ -8,7 +8,6 @@ describe("configuration", () => {
 			limits: { max_workers_total: 7 },
 		});
 		expect(merged.models.routing.default).toBe("devin/claude-opus-5-5");
-		// Sibling keys survive the merge.
 		expect(merged.models.routing.by_kind.merge).toBe("deepseek/deepseek-flash");
 		expect(merged.limits.max_workers_total).toBe(7);
 		expect(merged.limits.workers_per_tab).toBe(DEFAULT_CONFIG.limits.workers_per_tab);
