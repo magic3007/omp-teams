@@ -129,6 +129,8 @@ flowchart TD
   P -->|"teams_assign(repo): the words, unchanged"| R["★★ repo leader"]
   R -->|"teams_forward(group)"| GA["★ group leader · A"]
   R --> GB["★ group leader · B"]
+  R -->|"teams_forward() on an analysis task"| AN["☆ analyst"]
+  AN -->|answer| R
   GA -->|"teams_forward() into the queue"| WA["☆ worker 1"]
   GA --> IA["☆ integrator"]
   WA -->|commit| BRA[("teams/A")]
@@ -154,12 +156,26 @@ A repo or group leader started by a launcher *parks* when it sits idle: its seat
 omp session (`omp --resume`), same id and history. A session that never wrote a transcript
 starts fresh instead, because omp keeps no file for it.
 
+**Analysis.** A task of kind `analysis` asks about the code and changes nothing. The repo
+leader's `teams_forward({})` starts a one-shot *analyst* below it, on a new worktree and
+branch cut from the repository's current head. The analyst reports the answer, the system
+appends it to the repo leader's closing report and retires the analyst, and its launcher
+deletes the worktree and branch once omp has exited. An analyst that fails or disappears
+fails its task; the repo leader may forward the task again.
+
+**Closing.** `teams_close` (or `/teams close`) closes a direct report and its whole subtree
+in one step. Their seats leave the team, their open tasks are cancelled, their waiting mail
+is dropped, and each launcher gets a stop file. A running member aborts its turn and exits;
+a parked one exits from its wait. The pane closes with its launcher, and the workspace
+with its last pane. Group worktrees and branches stay for you to merge.
+
 **Git model.**
 
 | Level | Branch | Worktree |
 |---|---|---|
 | group | `teams/<group>` | `$OMP_TEAMS_HOME/wt/<project>/<group>/group` |
 | worker | `teams-w/<group>/w<N>` | `…/<group>/w<N>` |
+| analyst | `teams-a/<N>-<task>` | `$OMP_TEAMS_HOME/wt/<project>/analysis/<N>-<task>` (deleted when done) |
 
 `teams-w/` is a separate namespace because git cannot hold both `teams/main` and
 `teams/main/w1`. Workers commit in their own worktree and report the SHA; the integrator
@@ -213,6 +229,7 @@ Run `/teams` for the list. Every command works in the session's own pane.
 | `/teams status` / `progress [--fresh]` | members | member info / subordinate reports |
 | `/teams pause <group>` / `resume <group>` | leaders | stop or resume claiming in a group |
 | `/teams retire <worker>` | group leader | let a worker go after its current task |
+| `/teams close <member\|repo>` | leaders | close a direct report and everyone below it now |
 | `/teams accept-head <group>` | leaders | accept a group branch that moved; merges resume |
 | `/teams takeover` / `release` | worker | drive this worker pane by hand / give it back |
 | `/teams report <text>` | members | report progress to your manager |
@@ -234,17 +251,18 @@ normal tools.
 | Tool | Purpose |
 |---|---|
 | `teams_assign({repo, task, kind, difficulty, paths?, model?})` | personal leader: route a request to its repository; starts the repo leader when needed |
-| `teams_forward({group?, task_id?})` | repo leader: pass the held task to a group (starts the group leader); group leader: pass it to the queue (starts a worker) |
+| `teams_forward({group?, task_id?})` | repo leader: pass the held task to a group (starts the group leader), or an analysis task to a new analyst; group leader: pass it to the queue (starts a worker) |
 | `teams_report({status, summary, task_id?, sha?})` | progress / done / blocked / failed, one level up |
 | `teams_progress` / `teams_queue` | read-only views of subordinates and the group queue |
 | `teams_retire` / `teams_pause` | let a worker go / pause a group's hand-out |
+| `teams_close({member})` | close a direct report and its subtree; the personal leader may name the repository |
 | `teams_ask({to, question})` | a peer, your manager, or a direct subordinate |
 | `teams_merge({task_id})` | integrator only: merge a finished commit |
 | `teams_write_report` | write today's report file and notify |
 
 `kind`, `difficulty`, `paths` and `model` are set once, when the request enters the system,
 and travel down with every forward. `kind` is one of
-`feature|fix|refactor|test|docs|review|frontend|infra`; `difficulty` is
+`analysis|feature|fix|refactor|test|docs|review|frontend|infra`; `difficulty` is
 `trivial|simple|normal|hard`; both drive model routing.
 
 ## Configuration

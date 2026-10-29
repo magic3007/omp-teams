@@ -19,9 +19,9 @@ page only indexes code, tests and commands, and points at the files that define 
 | git worktrees and merges | [src/worktree.ts](../src/worktree.ts), [src/merge.ts](../src/merge.ts) |
 | tool-call guards per role | [src/policy.ts](../src/policy.ts) |
 | brakes, spend ledger, price fallback | [src/guard.ts](../src/guard.ts) |
-| assignment, reports, patrol, closing | [src/runtime.ts](../src/runtime.ts) |
+| assignment, reports, patrol, closing a subtree, analyst retirement | [src/runtime.ts](../src/runtime.ts) |
 | herdr client | [src/herdr.ts](../src/herdr.ts) |
-| launcher script, its stop/park/wake files, spawning and relaunching | [src/spawn.ts](../src/spawn.ts) |
+| launcher script, its stop/park/wake files, spawning (analysts included) and relaunching | [src/spawn.ts](../src/spawn.ts) |
 | status line, widget, tree overlay | [src/presence.ts](../src/presence.ts), [src/tree.ts](../src/tree.ts) |
 | daily report and audit export | [src/report.ts](../src/report.ts) |
 | `/teams resume` machine recovery | [src/rebuild.ts](../src/rebuild.ts) |
@@ -39,7 +39,7 @@ page only indexes code, tests and commands, and points at the files that define 
 | `bun run test:herdr:m2` | queue, integrator, pause, restart, retire ([scripts/herdr-m2.ts](../scripts/herdr-m2.ts)) |
 | `bun run test:herdr:ui` | status line, widget, tree overlay keys ([scripts/herdr-ui.ts](../scripts/herdr-ui.ts)) |
 | `bun run test:herdr:auto` | one sentence to the personal leader, outcome checks ([scripts/herdr-auto.ts](../scripts/herdr-auto.ts)) |
-| `MODE=guards\|budget\|rebuild\|fresh\|bootstrap\|park bun scripts/herdr-m3.ts` | brakes, halt/resume, rebuild, fresh status, bootstrap, park and wake |
+| `MODE=guards\|budget\|rebuild\|fresh\|bootstrap\|park\|close\|analyst bun scripts/herdr-m3.ts` | brakes, halt/resume, rebuild, fresh status, bootstrap, park and wake, one-sentence subtree close, analyst round trip |
 
 The herdr suites need a herdr pane and open their own temporary workspaces with an isolated
 state directory. `KEEP=1` keeps the tree and panes for inspection; without it everything is
