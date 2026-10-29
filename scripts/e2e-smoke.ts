@@ -193,10 +193,12 @@ async function main(): Promise<void> {
 	const managerTools = activeFor("group");
 	const workerTools = activeFor("worker");
 	check(
-		"group manager has no execution tools",
-		["bash", "edit", "write", "ast_edit", "task"].every((tool) => !managerTools.includes(tool)) &&
-			managerTools.includes("teams_assign") &&
-			managerTools.includes("read"),
+		"a group leader can only route: forwarding, and no research or execution tool",
+		["bash", "edit", "write", "ast_edit", "task", "read", "grep", "find", "glob", "web_search"].every(
+			(tool) => !managerTools.includes(tool),
+		) &&
+			managerTools.includes("teams_forward") &&
+			!managerTools.includes("teams_assign"),
 		managerTools.join(","),
 	);
 	check(

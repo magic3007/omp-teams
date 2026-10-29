@@ -1,6 +1,7 @@
 import {
 	aliveCount,
 	check,
+	configure,
 	createHarness,
 	finish,
 	lastLines,
@@ -18,6 +19,7 @@ const h = createHarness("auto", [
 	"  dead_after_seconds: 30",
 	"  max_workers_total: 6",
 ]);
+configure(h, ["repos:", "  roots:", `    - ${h.root}`, "  depth: 3"]);
 
 const REQUEST = [
 	`In the git repository at ${h.repo}, add two new files on a team branch:`,
@@ -117,6 +119,52 @@ async function main(): Promise<void> {
 	);
 	const blocked = tasks.filter((task) => task.status === "blocked");
 	check(h, "nothing is left blocked", blocked.length === 0, blocked.map((task) => task.id).join(" "));
+
+	const routed = queryAll<{ id: string; from_seat: string; kind: string; body: string; parent_task: string | null }>(
+		h,
+		"SELECT id, from_seat, kind, body, parent_task FROM tasks WHERE kind != 'merge' AND pin_slot IS NULL ORDER BY created_at",
+	);
+	const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
+	const levels = [...new Set(routed.map((task) => task.from_seat?.split(":")[0] ?? "-"))];
+	check(
+		h,
+		"one request travels personal → repo → group → worker, word for word",
+		routed.length === 3 &&
+			routed.every((task) => flat(task.body) === flat(REQUEST)) &&
+			[...levels].sort().join(",") === "group,personal,project",
+		routed.map((task) => `${task.from_seat?.split(":")[0]}:${task.kind}:${flat(task.body).slice(0, 24)}`).join(" | "),
+	);
+	const chained = routed.every((task, index) => index === 0 || task.parent_task === routed[index - 1]?.id);
+	check(h, "every forwarded task hangs off the one above it", routed.length === 3 && chained, routed.map((task) => `${task.id}←${task.parent_task ?? "-"}`).join(" "));
+	const policies = queryAll<{ role: string; detail: string }>(
+		h,
+		"SELECT a.role AS role, e.detail AS detail FROM events e JOIN agents a ON a.id = e.agent_id WHERE e.kind = 'tools:policy' ORDER BY e.id",
+	);
+	const lastPolicy = new Map<string, string[]>();
+	for (const row of policies) {
+		const parsed = JSON.parse(row.detail) as { active?: unknown; integrator?: unknown };
+		if (!Array.isArray(parsed.active)) continue;
+		const seat = parsed.integrator === true ? `${row.role}:integrator` : row.role;
+		lastPolicy.set(seat, parsed.active.filter((name): name is string => typeof name === "string"));
+	}
+	const workTools = ["bash", "edit", "write", "ast_edit", "read", "grep", "find", "glob", "web_search", "lsp", "todo", "task", "debug", "ida"];
+	const leaking = [...lastPolicy].filter(([, active]) => active.some((tool) => workTools.includes(tool)));
+	check(
+		h,
+		"no leader has a research or execution tool",
+		["personal", "project", "group"].every((role) => lastPolicy.has(role)) && leaking.length === 0,
+		leaking.map(([role, active]) => `${role}: ${active.join(",")}`).join(" | ") || [...lastPolicy].map(([role, active]) => `${role}: ${active.join(",")}`).join(" | "),
+	);
+	check(
+		h,
+		"each leader routes with its own tool: personal assigns, repo and group forward",
+		(lastPolicy.get("personal") ?? []).includes("teams_assign") &&
+			!lastPolicy.get("personal")?.includes("teams_forward") &&
+			(lastPolicy.get("project") ?? []).includes("teams_forward") &&
+			(lastPolicy.get("group") ?? []).includes("teams_forward") &&
+			!lastPolicy.get("group")?.includes("teams_assign"),
+		[...lastPolicy].map(([role, active]) => `${role}: ${active.filter((name) => name.startsWith("teams_")).join(",")}`).join(" | "),
+	);
 
 	const before = tasks.length;
 	await Bun.sleep(90_000);

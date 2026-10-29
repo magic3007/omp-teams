@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
-import { integratorBlockReason, managerBlockReason, workerBlockReason, type WorkerBounds } from "../src/policy";
+import { leaderBlockReason, TEAMS_TOOLS_FOR, workerBlockReason, type WorkerBounds } from "../src/policy";
 
 const bounds: WorkerBounds = {
 	worktree: "/teams/wt/p-1/feat-x/w1",
@@ -65,19 +65,49 @@ describe("worker guard", () => {
 	});
 });
 
-describe("manager and integrator guards", () => {
-	test("managers keep inspection tools and lose everything that executes", () => {
-		expect(managerBlockReason("read", { path: "/x" })).toBeNull();
-		expect(managerBlockReason("teams_assign", {})).toBeNull();
-		expect(managerBlockReason("bash", { command: "ls" })).toContain("managers do not execute work");
-		expect(managerBlockReason("learn", {})).toContain("managers do not execute work");
-		expect(managerBlockReason("lsp", { action: "rename" })).toContain("writes files");
-		expect(managerBlockReason("lsp", { action: "references" })).toBeNull();
+describe("leader and integrator routing guards", () => {
+	const RESEARCH_AND_EXECUTION = ["read", "grep", "find", "glob", "lsp", "web_search", "todo", "bash", "edit", "task", "ask"];
+
+	test("the personal leader assigns to a repository and never inspects or executes", () => {
+		for (const tool of RESEARCH_AND_EXECUTION) {
+			expect(leaderBlockReason("personal", tool)).toContain("leaders only route");
+		}
+		for (const tool of TEAMS_TOOLS_FOR.personal) {
+			expect(leaderBlockReason("personal", tool)).toBeNull();
+		}
+		expect(leaderBlockReason("personal", "teams_forward")).toContain("teams_assign");
+	});
+
+	test("the project leader forwards to a group and never inspects or executes", () => {
+		for (const tool of RESEARCH_AND_EXECUTION) {
+			expect(leaderBlockReason("project", tool)).toContain("leaders only route");
+		}
+		for (const tool of TEAMS_TOOLS_FOR.project) {
+			expect(leaderBlockReason("project", tool)).toBeNull();
+		}
+		expect(leaderBlockReason("project", "teams_assign")).toContain("leaders only route");
+	});
+
+	test("the group leader queues work and never inspects or executes", () => {
+		for (const tool of RESEARCH_AND_EXECUTION) {
+			expect(leaderBlockReason("group", tool)).toContain("leaders only route");
+		}
+		for (const tool of TEAMS_TOOLS_FOR.group) {
+			expect(leaderBlockReason("group", tool)).toBeNull();
+		}
+		expect(leaderBlockReason("group", "teams_assign")).toContain("leaders only route");
 	});
 
 	test("the integrator only merges", () => {
-		expect(integratorBlockReason("teams_merge", { task_id: "T-1" })).toBeNull();
-		expect(integratorBlockReason("bash", { command: "git merge x" })).toContain("teams_merge");
+		expect(leaderBlockReason("integrator", "teams_merge")).toBeNull();
+		expect(leaderBlockReason("integrator", "read")).toContain("the integrator only merges");
+		expect(leaderBlockReason("integrator", "bash")).toContain("teams_merge");
+	});
+
+	test("a worker reports but never routes", () => {
+		expect(workerBlockReason("teams_forward", {}, bounds)).toContain("workers do not route");
+		expect(workerBlockReason("teams_assign", {}, bounds)).toContain("workers do not route");
+		expect(workerBlockReason("teams_report", {}, bounds)).toBeNull();
 	});
 });
 

@@ -8,10 +8,11 @@ import type { TeamsHost } from "./host";
 import { resolveProject } from "./identity";
 import { decideDelivery, type MailRow, mailBody, persistedMsgIds, renderMail } from "./mail";
 import {
-	integratorBlockReason,
 	isManagerRole,
-	managerActiveTools,
-	managerBlockReason,
+	isTeamsTool,
+	leaderBlockReason,
+	TEAMS_TOOLS_FOR,
+	type ToolSeat,
 	type WorkerBounds,
 	workerBlockReason,
 } from "./policy";
@@ -93,6 +94,11 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		return agent.role === "worker" && runtime.slotOf(agent)?.kind === "integrator";
 	}
 
+	function toolSeat(agent: AgentRow): ToolSeat {
+		if (agent.role !== "worker") return agent.role;
+		return isIntegrator(agent) ? "integrator" : "worker";
+	}
+
 	function stopMember(): void {
 		if (stopping) return;
 		stopping = true;
@@ -120,15 +126,14 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			await pi.setActiveTools(base);
 			return;
 		}
-		if (isManagerRole(self.role) || isIntegrator(self)) {
-			const active = managerActiveTools(base, TEAMS_TOOLS);
-			await pi.setActiveTools(active);
-			logEvent(db, "tools:policy", { role: self.role, integrator: isIntegrator(self), active }, self.id);
-			return;
-		}
-		const active = [...base, ...TEAMS_TOOLS.filter((name) => !base.includes(name))].filter((name) => name !== "ask");
+		const seat = toolSeat(self);
+		const rest = base.filter((name) => !isTeamsTool(name));
+		const active =
+			seat === "worker"
+				? [...rest, ...TEAMS_TOOLS_FOR.worker].filter((name) => name !== "ask")
+				: [...TEAMS_TOOLS_FOR[seat]];
 		await pi.setActiveTools(active);
-		logEvent(db, "tools:policy", { role: self.role, active }, self.id);
+		logEvent(db, "tools:policy", { role: self.role, integrator: seat === "integrator", active }, self.id);
 	}
 
 	async function applyTaskModel(ctx: ExtensionContext, rows: MailRow[]): Promise<void> {
@@ -444,11 +449,11 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event) => {
 		const me = self;
 		if (!me) return;
-		const reason = isManagerRole(me.role)
-			? managerBlockReason(event.toolName, event.input)
-			: isIntegrator(me)
-				? integratorBlockReason(event.toolName, event.input)
-				: workerBlockReason(event.toolName, event.input, workerBounds(me));
+		const seat = toolSeat(me);
+		const reason =
+			seat === "worker"
+				? workerBlockReason(event.toolName, event.input, workerBounds(me))
+				: leaderBlockReason(seat, event.toolName);
 		if (reason) {
 			logEvent(db, "block", { tool: event.toolName, role: me.role, reason }, me.id);
 			return { block: true, reason };

@@ -42,6 +42,10 @@ export function createHarness(name: string, config: string[]): Harness {
 	};
 }
 
+export function configure(h: Harness, lines: string[]): void {
+	writeFileSync(join(h.teamsHome, "config.yml"), `${lines.join("\n")}\n`, { flag: "a" });
+}
+
 export function sh(cwd: string, args: string[]): string {
 	const proc = Bun.spawnSync(args, { cwd, stdout: "pipe", stderr: "pipe" });
 	if (proc.exitCode !== 0) throw new Error(`${args.join(" ")}: ${proc.stderr.toString()}`);

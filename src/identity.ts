@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { basename, dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 
 export type Role = "personal" | "project" | "group" | "worker";
 export const ROLES: Role[] = ["personal", "project", "group", "worker"];
@@ -34,6 +35,12 @@ export function resolveProject(cwd: string): ProjectIdentity | null {
 	const root = basename(commonDir) === ".git" ? dirname(commonDir) : commonDir;
 	const absoluteRoot = resolve(root);
 	return { id: `p-${hash8(absoluteRoot)}`, name: basename(absoluteRoot), root: absoluteRoot };
+}
+
+export function expandHome(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+	return path;
 }
 
 export function personalSeat(): string {

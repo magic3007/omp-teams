@@ -1,40 +1,19 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { ASSIGNABLE_KINDS, TASK_DIFFICULTIES, type TaskDifficulty, type TaskKind } from "./config";
 import type { TeamsHost } from "./host";
+import { TEAMS_TOOLS_FOR } from "./policy";
 import type { AgentRow } from "./registry";
 import { writeDailyReport } from "./report";
-import { NO_OPEN_TASK } from "./runtime";
-import { type SpawnDeps, spawnGroup, spawnProject, spawnWorker } from "./spawn";
+import { assignWork, forwardTask, routeDeps } from "./route";
+import type { SpawnDeps } from "./spawn";
 
-export const TEAMS_TOOLS = [
-	"teams_assign",
-	"teams_report",
-	"teams_progress",
-	"teams_queue",
-	"teams_spawn",
-	"teams_retire",
-	"teams_pause",
-	"teams_merge",
-	"teams_ask",
-	"teams_write_report",
-];
+export const TEAMS_TOOLS = [...new Set(Object.values(TEAMS_TOOLS_FOR).flatMap((names) => [...names]))];
 
 function text(
 	body: string,
 	details: Record<string, unknown> = {},
 ): { content: { type: "text"; text: string }[]; details: Record<string, unknown> } {
 	return { content: [{ type: "text", text: body }], details };
-}
-
-async function waitForMembers(ready: () => AgentRow[] | null, signal: AbortSignal | undefined, timeoutMs = 150_000): Promise<AgentRow[] | null> {
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		if (signal?.aborted) return null;
-		const members = ready();
-		if (members) return members;
-		await Bun.sleep(500);
-	}
-	return null;
 }
 
 function requireMember(host: TeamsHost): { ok: true; me: AgentRow } | { ok: false; message: string } {
@@ -54,19 +33,22 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 	const { runtime } = host;
 
 	const assignSchema = z.object({
-		to: z
+		repo: z
 			.string()
-			.optional()
-			.describe("Direct subordinate (label, agent id or seat). Group leads may omit it to queue the task for any free worker."),
-		task: z.string().describe("Full task description the subordinate should execute"),
+			.describe("Repository the request belongs to: its name the way the human said it, or its path. The repo leader is started if it does not exist."),
+		task: z.string().describe("The human's request word for word. Do not plan, split or reword it."),
 		kind: z.enum(ASSIGNABLE_KINDS).describe("Work direction, e.g. feature, fix, refactor, test, docs"),
 		difficulty: z.enum(TASK_DIFFICULTIES).describe("Difficulty tier used for model routing"),
-		paths: z.array(z.string()).optional().describe("Files or paths the task touches, for path_rules routing"),
+		paths: z.array(z.string()).optional().describe("Files or paths the request names, for path_rules routing"),
 		model: z.string().optional().describe("Explicit model override; must be listed in models.allowed"),
-		parent_task: z
+	});
+
+	const forwardSchema = z.object({
+		group: z
 			.string()
 			.optional()
-			.describe("Id of the task you hold that this work serves (T-...). Needed only when you hold more than one task."),
+			.describe("Group that should do the work (lowercase letters, digits and \"-\"). A repo leader names it; the group leader is started if it does not exist. A group leader leaves this out."),
+		task_id: z.string().optional().describe("Held task to forward. Needed only when you hold more than one."),
 	});
 
 	const reportSchema = z.object({
@@ -79,13 +61,6 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 	});
 
 	const emptySchema = z.object({});
-
-	const spawnSchema = z.object({
-		role: z.enum(["project", "group", "worker"]).describe("What to spawn below you"),
-		repo: z.string().optional().describe("Repository path, for role=project"),
-		group: z.string().optional().describe("Group name, for role=group"),
-		count: z.number().int().min(1).max(8).optional().describe("How many workers, for role=worker"),
-	});
 
 	const retireSchema = z.object({
 		worker: z.string().describe("Worker label, agent id or seat"),
@@ -107,32 +82,58 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 
 	pi.registerTool({
 		name: "teams_assign",
-		label: "Assign task",
+		label: "Send a request to its repository",
 		description:
-			"Hand one task down one level. Project/personal managers must name a direct subordinate. A group lead may omit `to` to queue the task for the next free worker. `kind` and `difficulty` are required; the model is routed from them.",
+			"Personal leader only: route one human request to the repo leader of the repository it belongs to, starting that leader when none exists. Send the request word for word; the repo leader takes it from there.",
 		parameters: assignSchema,
 		defaultInactive: true,
 		execute: async (_toolCallId, params) => {
 			const member = requireMember(host);
 			if (!member.ok) return text(member.message, { ok: false });
-			const result = runtime.assign(member.me, {
-				to: params.to,
+			const result = await assignWork(routeDeps(runtime, spawnDeps()), member.me, {
+				to: params.repo,
 				task: params.task,
 				kind: params.kind as TaskKind,
 				difficulty: params.difficulty as TaskDifficulty,
 				paths: params.paths,
 				model: params.model,
-				requireOpenTask: true,
-				parentTask: params.parent_task,
+			});
+			if (!result.ok) {
+				const ask = result.askHuman
+					? "\nThe repository is unclear. Ask the human which repository this request belongs to, list the candidates above if there are any, and stop. Do not pick a candidate and do not try a name or path the human did not give."
+					: "";
+				return text(`ERROR: ${result.error}${ask}`, { ok: false });
+			}
+			const started = result.started ? ` (started ${result.started})` : "";
+			return text(
+				`routed ${result.taskId} to ${result.to?.label ?? "no one"}${started}${result.model ? ` (model ${result.model})` : ""}.`,
+				{ ok: true, taskId: result.taskId, to: result.to?.id ?? null, started: result.started, model: result.model },
+			);
+		},
+	});
+
+	pi.registerTool({
+		name: "teams_forward",
+		label: "Forward the task you hold",
+		description:
+			"Repo and group leaders: pass the task you hold down one level, unchanged. A repo leader names the group and a missing group leader is started; a group leader queues into its own group and a missing worker is started. kind, difficulty, paths and model travel with the task.",
+		parameters: forwardSchema,
+		defaultInactive: true,
+		execute: async (_toolCallId, params) => {
+			const member = requireMember(host);
+			if (!member.ok) return text(member.message, { ok: false });
+			const result = await forwardTask(routeDeps(runtime, spawnDeps()), member.me, {
+				group: params.group,
+				taskId: params.task_id,
 			});
 			if (!result.ok) return text(`ERROR: ${result.error}`, { ok: false });
+			const started = result.started ? ` (started ${result.started})` : "";
 			const where = result.to ? `to ${result.to.label}` : "on the group queue";
-			return text(`assigned ${result.taskId} ${where}${result.model ? ` (model ${result.model})` : ""}.`, {
+			return text(`forwarded ${result.taskId} ${where}${started}.`, {
 				ok: true,
 				taskId: result.taskId,
-				model: result.model,
 				to: result.to?.id ?? null,
-				queued: result.queued,
+				started: result.started,
 			});
 		},
 	});
@@ -175,7 +176,8 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 				const when = report ? `${Math.round((Date.now() - report.at) / 60000)}m ago` : "never";
 				const flat = report?.summary?.replace(/\s+/g, " ") ?? "-";
 				const summary = flat.length > 400 ? `${flat.slice(0, 400)}… (shortened here; the full report is in its [teams report] message)` : flat;
-				return `${entry.agent.label} | session ${entry.session} | ${entry.current ? `▶ ${entry.current.id}` : "idle"} | last: ${report?.status ?? "-"} ${when} | ${summary}`;
+				const parked = "";
+				return `${parked}${entry.agent.label} | session ${entry.session} | ${entry.current ? `▶ ${entry.current.id} ${entry.current.title}` : "idle"} | last: ${report?.status ?? "-"} ${when} | ${summary}`;
 			});
 			return text(lines.join("\n"), {
 				ok: true,
@@ -195,67 +197,6 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 			if (!member.ok) return text(member.message, { ok: false });
 			if (!member.me.group_name) return text("ERROR: you are not in a group; the queue belongs to a group.", { ok: false });
 			return text(runtime.queueText(member.me), { ok: true });
-		},
-	});
-
-	pi.registerTool({
-		name: "teams_spawn",
-		label: "Spawn subordinate",
-		description:
-			"Create subordinates with their own herdr panes and worktrees: a project lead (personal only), a group lead (project only), or workers (group only; the group's integrator comes with the first worker).",
-		parameters: spawnSchema,
-		defaultInactive: true,
-		execute: async (_toolCallId, params, signal) => {
-			const member = requireMember(host);
-			if (!member.ok) return text(member.message, { ok: false });
-			if ((member.me.role === "project" || member.me.role === "group") && !runtime.heldTask(member.me)) {
-				return text(`ERROR: ${NO_OPEN_TASK}`, { ok: false });
-			}
-			const deps = spawnDeps();
-			if (!deps) return text("ERROR: herdr is not available in this session; spawning needs a herdr pane.", { ok: false });
-			const registry = runtime.registry;
-			if (params.role === "project") {
-				if (!params.repo) return text("ERROR: role=project needs `repo`", { ok: false });
-				const spawned = spawnProject(deps, member.me, { repoPath: params.repo });
-				if (!spawned.ok) return text(`ERROR: ${spawned.error}`, { ok: false });
-				const seat = `project:${spawned.value.project.id}`;
-				const live = await waitForMembers(() => {
-					const lead = registry.bySeat(seat);
-					return lead ? [lead] : null;
-				}, signal);
-				if (!live) return text(`ERROR: the repo leader for ${spawned.value.project.name} did not register in time.`, { ok: false });
-				return text(`${live[0]?.label} is up. Assign it the objective with teams_assign({ to: "${live[0]?.id}", ... }).`, {
-					ok: true,
-					to: live[0]?.id,
-				});
-			}
-			if (params.role === "group") {
-				if (!params.group) return text("ERROR: role=group needs `group`", { ok: false });
-				const spawned = spawnGroup(deps, member.me, { name: params.group });
-				if (!spawned.ok) return text(`ERROR: ${spawned.error}`, { ok: false });
-				const seat = `group:${member.me.project_id}/${params.group}`;
-				const live = await waitForMembers(() => {
-					const lead = registry.bySeat(seat);
-					return lead ? [lead] : null;
-				}, signal);
-				if (!live) return text(`ERROR: the group leader of ${params.group} did not register in time.`, { ok: false });
-				return text(`${live[0]?.label} is up. Assign it its slice with teams_assign({ to: "${live[0]?.id}", ... }).`, {
-					ok: true,
-					to: live[0]?.id,
-				});
-			}
-			const spawned = spawnWorker(deps, member.me, { count: params.count ?? 1 });
-			if (!spawned.ok) return text(`ERROR: ${spawned.error}`, { ok: false });
-			const seats = spawned.value.map((worker) => `worker:${worker.slotId}`);
-			const live = await waitForMembers(() => {
-				const rows = seats.map((seat) => registry.bySeat(seat));
-				return rows.every((row) => row !== null) ? (rows as AgentRow[]) : null;
-			}, signal);
-			if (!live) return text(`ERROR: spawned ${seats.length} worker(s) but not all registered in time.`, { ok: false });
-			return text(
-				`${live.map((row) => row.label).join(", ")} are up. Queue tasks with teams_assign (no \`to\`); free workers claim them.`,
-				{ ok: true, workers: live.map((row) => row.label) },
-			);
 		},
 	});
 

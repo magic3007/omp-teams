@@ -6,7 +6,8 @@ import type { TaskDifficulty, TaskKind } from "./config";
 import type { TeamsHost } from "./host";
 import { git, resolveProject, type Role } from "./identity";
 import { type SpawnDeps, spawnGroup, spawnProject, spawnWorker } from "./spawn";
-import { describeRebuild, rebuildMachine, waitForSeat } from "./rebuild";
+import { awaitSeat, assignWork, queueWork, routeDeps } from "./route";
+import { describeRebuild, rebuildMachine } from "./rebuild";
 import { formatUsd } from "./guard";
 import { sinceFromHours, writeAudit, writeDailyReport } from "./report";
 import { buildTeamTree, showTreeOverlay, treeText } from "./tree";
@@ -19,7 +20,7 @@ const USAGE = [
 	"/teams spawn project --repo <path>   spawn a project lead in its own herdr workspace",
 	"/teams spawn group <name>            spawn a group lead",
 	"/teams spawn worker [--count N]      spawn N workers into this group (the integrator comes with the first)",
-	"/teams assign <to|queue> <kind> <difficulty> <task>   hand work down one level (queue: group lead only)",
+	"/teams assign <repo|group|worker|queue> <kind> <difficulty> <task>   hand work down one level (a missing leader or worker is started)",
 	"/teams queue                         show this group's task list",
 	"/teams pause <group> | resume <group>   stop or resume claiming in a group",
 	"/teams retire <worker>               stop a worker after its current task (group lead)",
@@ -368,18 +369,28 @@ export function registerTeamsCommands(
 						host.notify("/teams assign <to|queue> <kind> <difficulty> <task>", "error");
 						return;
 					}
-					const result = runtime.assign(me, {
-						to: to === "queue" ? undefined : to,
-						task: taskText,
-						kind: kind as TaskKind,
-						difficulty: difficulty as TaskDifficulty,
-					});
+					const result =
+						to === "queue"
+							? queueWork(routeDeps(runtime, spawnDeps()), me, {
+									task: taskText,
+									kind: kind as TaskKind,
+									difficulty: difficulty as TaskDifficulty,
+									requireOpenTask: false,
+								})
+							: await assignWork(routeDeps(runtime, spawnDeps()), me, {
+									to,
+									task: taskText,
+									kind: kind as TaskKind,
+									difficulty: difficulty as TaskDifficulty,
+									requireOpenTask: false,
+								});
 					if (!result.ok) {
 						host.notify(result.error, "error");
 						return;
 					}
+					const started = result.started ? ` (started ${result.started})` : "";
 					host.notify(
-						`assigned ${result.taskId} ${result.to ? `to ${result.to.label}` : "on the group queue"}${result.model ? ` (model ${result.model})` : ""}`,
+						`assigned ${result.taskId} ${result.to ? `to ${result.to.label}` : "on the group queue"}${started}${result.model ? ` (model ${result.model})` : ""}`,
 						"info",
 					);
 					return;
@@ -466,7 +477,7 @@ export function registerTeamsCommands(
 						return;
 					}
 					host.notify(`repo leader spawned for ${project.value.project.name}; waiting for it to register…`, "info");
-					const projectLead = await waitForSeat(runtime, `project:${project.value.project.id}`, 180_000);
+					const projectLead = await awaitSeat(runtime, `project:${project.value.project.id}`, 180_000);
 					if (!projectLead) {
 						host.notify("the repo leader did not register in time", "error");
 						return;
@@ -477,7 +488,7 @@ export function registerTeamsCommands(
 						return;
 					}
 					host.notify(`group leader ${groupName} spawned; waiting for it to register…`, "info");
-					const groupLead = await waitForSeat(runtime, `group:${project.value.project.id}/${groupName}`, 180_000);
+					const groupLead = await awaitSeat(runtime, `group:${project.value.project.id}/${groupName}`, 180_000);
 					if (!groupLead) {
 						host.notify("the group leader did not register in time", "error");
 						return;

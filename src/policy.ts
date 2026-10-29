@@ -1,15 +1,24 @@
 import { homedir } from "node:os";
 import { resolve } from "node:path";
-import type { Role } from "./identity";
+import { expandHome, type Role } from "./identity";
 
-export const MANAGER_TOOLS: Record<string, true> = {
-	read: true,
-	grep: true,
-	find: true,
-	glob: true,
-	lsp: true,
-	todo: true,
-	web_search: true,
+export type ToolSeat = Role | "integrator";
+
+export const TEAMS_TOOLS_FOR: Record<ToolSeat, readonly string[]> = {
+	personal: ["teams_assign", "teams_progress", "teams_ask", "teams_write_report"],
+	project: ["teams_forward", "teams_report", "teams_progress", "teams_ask", "teams_pause", "teams_write_report"],
+	group: [
+		"teams_forward",
+		"teams_report",
+		"teams_progress",
+		"teams_queue",
+		"teams_ask",
+		"teams_pause",
+		"teams_retire",
+		"teams_write_report",
+	],
+	worker: ["teams_report", "teams_ask", "teams_queue"],
+	integrator: ["teams_merge", "teams_report"],
 };
 
 export const TEAMS_TOOL_PREFIX = "teams_";
@@ -22,29 +31,19 @@ export function isManagerRole(role: Role): boolean {
 	return role === "personal" || role === "project" || role === "group";
 }
 
-function readOnlyBlockReason(toolName: string, input: unknown, who: string, instead: string): string | null {
-	if (isTeamsTool(toolName)) return null;
-	if (!MANAGER_TOOLS[toolName]) return `${who}: ${toolName} is not available. ${instead}`;
-	if (toolName === "lsp" && typeof input === "object" && input !== null && "action" in input) {
-		const action = input.action;
-		if (action === "rename" || action === "rename_file") {
-			return `${who}: lsp ${String(action)} writes files. ${instead}`;
-		}
-	}
-	return null;
-}
+const LEADER_BLOCK: Record<Exclude<ToolSeat, "worker">, (toolName: string) => string> = {
+	personal: (toolName) =>
+		`leaders only route: ${toolName} is not available. Send the request to its repository with teams_assign.`,
+	project: (toolName) =>
+		`leaders only route: ${toolName} is not available. Pass your task to a group with teams_forward.`,
+	group: (toolName) => `leaders only route: ${toolName} is not available. Queue your task with teams_forward.`,
+	integrator: (toolName) =>
+		`the integrator only merges: ${toolName} is not available. Run the merge with teams_merge.`,
+};
 
-export function managerBlockReason(toolName: string, input: unknown): string | null {
-	return readOnlyBlockReason(
-		toolName,
-		input,
-		"managers do not execute work",
-		"Assign the task with teams_assign instead.",
-	);
-}
-
-export function integratorBlockReason(toolName: string, input: unknown): string | null {
-	return readOnlyBlockReason(toolName, input, "the integrator only merges", "Run the merge with teams_merge.");
+export function leaderBlockReason(seat: Exclude<ToolSeat, "worker">, toolName: string): string | null {
+	if (TEAMS_TOOLS_FOR[seat].includes(toolName)) return null;
+	return LEADER_BLOCK[seat](toolName);
 }
 
 export interface WorkerBounds {
@@ -185,12 +184,6 @@ function commandOf(words: string[]): { name: string; args: string[] } | null {
 	const name = words[index];
 	if (!name) return null;
 	return { name, args: words.slice(index + 1) };
-}
-
-function expandHome(path: string): string {
-	if (path === "~") return homedir();
-	if (path.startsWith("~/")) return `${homedir()}/${path.slice(2)}`;
-	return path;
 }
 
 function resolveAgainst(base: string, path: string): string {
@@ -412,6 +405,9 @@ export function workerBlockReason(toolName: string, input: unknown, bounds: Work
 	if (toolName === "ask") {
 		return "the built-in ask tool blocks until a human answers; use teams_ask to reach your group lead instead.";
 	}
+	if (isTeamsTool(toolName) && !TEAMS_TOOLS_FOR.worker.includes(toolName)) {
+		return `workers do not route: ${toolName} is not available. Report to your group leader with teams_report.`;
+	}
 	if (!bounds || typeof input !== "object" || input === null) return null;
 	const rules = `You work only in ${bounds.worktree} on branch ${bounds.branch}; commit there and report the SHA. The integrator merges it.`;
 
@@ -435,10 +431,4 @@ export function workerBlockReason(toolName: string, input: unknown, bounds: Work
 		if (foreign) return `workers do not edit files outside their own worktree (${foreign}). ${rules}`;
 	}
 	return null;
-}
-
-export function managerActiveTools(current: string[], teamsTools: string[]): string[] {
-	const kept = current.filter((name) => MANAGER_TOOLS[name] || isTeamsTool(name));
-	const missing = teamsTools.filter((name) => !kept.includes(name));
-	return [...kept, ...missing];
 }

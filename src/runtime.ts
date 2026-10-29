@@ -6,7 +6,7 @@ import { type Role, sessionTag } from "./identity";
 import { type MailBody, type MailKind, Mailer, type MailRow } from "./mail";
 import { mergeIntoGroup } from "./merge";
 import { isManagerRole } from "./policy";
-import { ACTIVE_STATUSES, TaskQueue, type TaskRow, taskTitle } from "./queue";
+import { ACTIVE_STATUSES, TaskQueue, type TaskRow, taskPaths, taskTitle } from "./queue";
 import { type AgentRow, type GroupRow, type RegisterInput, type RegisterResult, Registry } from "./registry";
 import { type SlotKind, type SlotRow, Slots } from "./slots";
 import { branchHead, changedFiles, commitExists, currentBranch, isAncestor } from "./worktree";
@@ -374,14 +374,19 @@ export class TeamsRuntime {
 			return { ok: false, error: NO_OPEN_TASK };
 		}
 
+		const config = this.configOf(viewer);
 		let model: string | null = null;
 		if (!target || target.role === "worker") {
-			const resolved = resolveModel(this.configOf(viewer), {
+			const resolved = resolveModel(config, {
 				kind: request.kind,
 				difficulty: request.difficulty,
 				model: request.model,
 				paths: request.paths,
 			});
+			if ("error" in resolved) return { ok: false, error: resolved.error };
+			model = resolved.model;
+		} else if (request.model) {
+			const resolved = resolveModel(config, { model: request.model });
 			if ("error" in resolved) return { ok: false, error: resolved.error };
 			model = resolved.model;
 		}
@@ -400,6 +405,7 @@ export class TeamsRuntime {
 			kind: request.kind,
 			difficulty: request.difficulty,
 			model,
+			paths: request.paths,
 			status: target ? "assigned" : "queued",
 			parentTask: received?.id ?? null,
 		});
@@ -429,6 +435,7 @@ export class TeamsRuntime {
 				kind: task.kind,
 				difficulty: task.difficulty,
 				model: task.model ?? undefined,
+				paths: taskPaths(task),
 				text: task.body,
 			},
 		});
@@ -640,8 +647,8 @@ export class TeamsRuntime {
 
 		const actualHead = branchHead(group.worktree);
 		if (group.head_sha && actualHead && actualHead !== group.head_sha) {
-			this.queue.block(task.id);
 			const summary = `${group.branch} moved outside the integrator (expected ${group.head_sha.slice(0, 12)}, found ${actualHead.slice(0, 12)}). Merges are on hold until a human checks the branch and runs /teams accept-head ${group.name}.`;
+			this.queue.block(task.id);
 			this.report(integrator, { status: "blocked", summary });
 			logEvent(this.options.db, "merge:head-mismatch", { expected: group.head_sha, actual: actualHead }, integrator.id, this.now());
 			return { ok: true, summary };
@@ -846,7 +853,7 @@ export class TeamsRuntime {
 						kind: "notice",
 						taskId: task.id,
 						body: {
-							text: `Task ${task.id} (${task.title}) has run for ${Math.round((now - task.updated_at) / 60_000)} minutes without a report from ${owner.label}. Ask with teams_ask, or decide whether to re-scope it.`,
+							text: `Task ${task.id} (${task.title}) has run for ${Math.round((now - task.updated_at) / 60_000)} minutes without a report from ${owner?.label ?? task.to_agent}. Ask with teams_ask, or decide whether to re-scope it.`,
 						},
 					});
 					this.queue.markEscalated(task.id);
@@ -930,10 +937,10 @@ export class TeamsRuntime {
 			.get(manager.project_id, manager.group_name, since) as { n: number } | null;
 		const count = row?.n ?? 0;
 		if (count < limit) return false;
-		this.registry.setGroupPaused(manager.project_id, manager.group_name, true, "blocked-rate");
 		const summary = `group ${manager.group_name} produced ${count} blocked report(s) in the last hour (limit ${limit}); it is paused and needs a human. Resume it with /teams resume ${manager.group_name} once the cause is fixed.`;
+		this.registry.setGroupPaused(group.project_id, group.name, true, "blocked-rate");
 		this.report(manager, { status: "blocked", summary });
-		logEvent(this.options.db, "guard:blocked-rate", { group: manager.group_name, count, limit }, manager.id, this.now());
+		logEvent(this.options.db, "guard:blocked-rate", { group: group.name, count, limit }, manager.id, this.now());
 		return true;
 	}
 
@@ -1018,7 +1025,7 @@ export class TeamsRuntime {
 		blocked: number;
 		unread: number;
 	} {
-		const alive = this.registry.allAlive();
+		const members = this.registry.allAlive();
 		const inScope = (row: AgentRow): boolean => {
 			if (agent.role === "personal") return true;
 			if (!agent.project_id) return false;
@@ -1026,7 +1033,7 @@ export class TeamsRuntime {
 			if (agent.role === "project") return true;
 			return row.group_name === agent.group_name;
 		};
-		const scoped = alive.filter(inScope);
+		const scoped = members.filter(inScope);
 		const taskRows = this.options.db
 			.query(
 				`SELECT status, COUNT(*) AS n FROM tasks
@@ -1062,6 +1069,12 @@ export class TeamsRuntime {
 
 	heldTask(agent: AgentRow): TaskRow | null {
 		return this.queue.held(agent.id, agent.seat);
+	}
+
+	forwardable(agent: AgentRow): TaskRow[] {
+		return this.queue
+			.heldAll(agent.id, agent.seat)
+			.filter((task) => !this.queue.children(task.id).some((child) => child.status !== "cancelled"));
 	}
 
 	queueText(agent: AgentRow): string {

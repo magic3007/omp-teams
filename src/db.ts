@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export function teamsHome(): string {
 	return process.env.OMP_TEAMS_HOME ?? join(homedir(), ".omp", "teams");
@@ -174,6 +174,10 @@ ALTER TABLE usage ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE usage ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0;
 `;
 
+const MIGRATION_V8 = `
+ALTER TABLE tasks ADD COLUMN paths TEXT;
+`;
+
 export function openDb(home = teamsHome()): Database {
 	mkdirSync(home, { recursive: true });
 	const db = new Database(join(home, "teams.db"), { create: true });
@@ -196,6 +200,7 @@ function migrate(db: Database): void {
 		if (current < 5) db.exec(MIGRATION_V5);
 		if (current < 6) db.exec(MIGRATION_V6);
 		if (current < 7) db.exec(MIGRATION_V7);
+		if (current < 8) db.exec(MIGRATION_V8);
 		db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 	})();
 }

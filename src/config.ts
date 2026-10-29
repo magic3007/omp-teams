@@ -45,6 +45,10 @@ export interface TeamsConfig {
 		fresh_per_hour: number;
 	};
 	worktree_root: string;
+	repos: {
+		roots: string[];
+		depth: number;
+	};
 	merge: {
 		verify_command: string;
 		verify_timeout_seconds: number;
@@ -108,6 +112,7 @@ export const DEFAULT_CONFIG: TeamsConfig = {
 	},
 	rate_limits: { fresh_per_hour: 4 },
 	worktree_root: join(teamsHome(), "wt"),
+	repos: { roots: ["~"], depth: 4 },
 	merge: { verify_command: "", verify_timeout_seconds: 600 },
 	auto_integrator: true,
 	stall_minutes: 30,

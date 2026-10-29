@@ -18,6 +18,7 @@ export interface TaskRow {
 	kind: string;
 	difficulty: string;
 	model: string | null;
+	paths: string | null;
 	status: TaskStatus;
 	sha: string | null;
 	attempts: number;
@@ -49,6 +50,7 @@ export interface NewTask {
 	kind: string;
 	difficulty: string;
 	model: string | null;
+	paths?: string[];
 	status: "queued" | "assigned";
 	parentTask?: string | null;
 	sourceSlot?: string | null;
@@ -61,6 +63,12 @@ export type FailOutcome = { status: "queued" | "blocked"; attempts: number };
 export function taskTitle(body: string): string {
 	const firstLine = body.split("\n").find((line) => line.trim().length > 0) ?? body;
 	return firstLine.trim().slice(0, 120);
+}
+
+export function taskPaths(row: TaskRow): string[] {
+	if (!row.paths) return [];
+	const parsed: unknown = JSON.parse(row.paths);
+	return Array.isArray(parsed) ? parsed.filter((path): path is string => typeof path === "string") : [];
 }
 
 export class TaskQueue {
@@ -78,8 +86,8 @@ export class TaskQueue {
 		const at = this.now();
 		this.db.run(
 			`INSERT INTO tasks (id, project_id, group_name, from_agent, from_seat, to_agent, to_seat, slot_id, title, body,
-				kind, difficulty, model, status, attempts, created_at, updated_at, parent_task, source_slot, source_sha, pin_slot)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+				kind, difficulty, model, paths, status, attempts, created_at, updated_at, parent_task, source_slot, source_sha, pin_slot)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
 			[
 				id,
 				input.projectId,
@@ -94,6 +102,7 @@ export class TaskQueue {
 				input.kind,
 				input.difficulty,
 				input.model,
+				input.paths && input.paths.length > 0 ? JSON.stringify(input.paths) : null,
 				input.status,
 				at,
 				at,
@@ -266,6 +275,12 @@ export class TaskQueue {
 
 	markEscalated(taskId: string): void {
 		this.db.run("UPDATE tasks SET escalated_at = ? WHERE id = ?", [this.now(), taskId]);
+	}
+
+	children(taskId: string): TaskRow[] {
+		return this.db
+			.query("SELECT * FROM tasks WHERE parent_task = ? ORDER BY created_at, rowid")
+			.all(taskId) as TaskRow[];
 	}
 
 	descendants(rootId: string): TaskRow[] {
