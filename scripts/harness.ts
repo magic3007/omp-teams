@@ -111,8 +111,6 @@ export function panes(h: Harness): HerdrPane[] {
 export function run(h: Harness, paneId: string, command: string): void {
 	const result = h.herdr.runInPane(paneId, command);
 	if (!result.ok) throw new Error(result.error);
-	Bun.sleep(300);
-	Bun.spawnSync(["herdr", "pane", "send-keys", paneId, "enter"], { stdout: "ignore", stderr: "ignore" });
 }
 
 function agentStatus(paneId: string): string | null {
@@ -202,7 +200,11 @@ export async function bringUpGroup(
 	if (!personalUp) return null;
 
 	run(h, personalPane, `/teams spawn project --repo ${h.repo}`);
-	const projectUp = await waitFor(() => aliveCount(h, "project") === 1, 180_000, "project lead registered");
+	let projectUp = await waitFor(() => aliveCount(h, "project") === 1, 60_000, "project lead registered");
+	if (!projectUp) {
+		run(h, personalPane, `/teams spawn project --repo ${h.repo}`);
+		projectUp = await waitFor(() => aliveCount(h, "project") === 1, 120_000, "project lead registered on retry");
+	}
 	check(h, "project lead comes up", projectUp, projectUp ? "" : lastLines(personalPane, 4));
 	if (!projectUp) return null;
 	await waitFor(
