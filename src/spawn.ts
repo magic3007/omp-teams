@@ -5,7 +5,7 @@
  * identity arrives as `OMP_TEAMS_JOIN`, which the extension consumes on session
  * start, so a spawned member registers itself without a human running `/teams`.
  *
- * Layout (per PLAN D5): one workspace per repository, a `★★ repo leader` tab, one
+ * Layout: one workspace per repository, a `★★ repo leader` tab, one
  * `★ group leader · <g>` tab per group (its integrator beside the lead), and
  * worker tabs `☆ workers · <g>` holding up to `limits.workers_per_tab` panes.
  */

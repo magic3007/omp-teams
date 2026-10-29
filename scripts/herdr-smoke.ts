@@ -3,7 +3,7 @@
  *
  * What it proves:
  *   - `/teams spawn` puts personal -> project -> group -> workers into panes with
- *     the layout from PLAN D5 (workspace per repo; tabs `★★ repo leader`,
+ *     the herdr layout (workspace per repo; tabs `★★ repo leader`,
  *     `★ group leader · <g>`, `☆ workers · <g>`)
  *   - spawned members self-register through `OMP_TEAMS_JOIN`
  *   - every pane carries `display_agent` / state labels through herdr metadata

@@ -1,2 +1,5 @@
 node_modules/
 .omp/
+
+# Local development plan; not part of the published package.
+PLAN.md

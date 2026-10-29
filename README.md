@@ -367,7 +367,6 @@ close them afterwards (`KEEP=1` keeps them for inspection). Run them inside a he
 | `src/report.ts` | daily report and audit export |
 | `src/rebuild.ts` | `/teams resume` machine recovery |
 | `src/commands.ts`, `src/tools.ts` | the `/teams` surface and agent tools |
-| `PLAN.md` | the design record, in Chinese, with the acceptance evidence |
 
 ## Limitations
 
