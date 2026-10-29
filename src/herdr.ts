@@ -215,8 +215,3 @@ export function currentPaneId(): string | null {
 	const pane = process.env.HERDR_PANE_ID;
 	return pane && pane.length > 0 ? pane : null;
 }
-
-export function currentWorkspaceId(): string | null {
-	const workspace = process.env.HERDR_WORKSPACE_ID;
-	return workspace && workspace.length > 0 ? workspace : null;
-}
