@@ -3,3 +3,11 @@ node_modules/
 
 # Local development plan; not part of the published package.
 PLAN.md
+
+# Agent development files: local only, never published.
+.agents/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+.tmp/
