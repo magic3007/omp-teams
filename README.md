@@ -12,7 +12,7 @@
 > This is an omp **extension**, not a standalone tool. It needs `omp` and `herdr` already
 > installed, and every member is a real omp session with its own pane, model and context.
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#commands) · [Agent tools](#agent-tools) · [Configuration](#configuration) · [Brakes](#brakes-and-recovery) · [Reports](#reports-and-audit) · [Testing](#testing) · [Limitations](#limitations)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#commands) · [Agent tools](#agent-tools) · [Configuration](#configuration) · [Brakes](#brakes-and-recovery) · [Reports](#reports-and-audit) · [Development](#development) · [Limitations](#limitations)
 
 ---
 
@@ -333,40 +333,10 @@ rebuilt — it is your entry point.
 `/teams audit [--hours 24]` writes `$OMP_TEAMS_HOME/exports/audit-<time>.json` with
 projects, groups, agents, slots, tasks, messages, events, usage and brake state.
 
-## Testing
+## Development
 
-```bash
-bun test                  # unit tests: registry, mail, routing, queue, merges, guards, reports
-bun run test:e2e          # real `omp --mode rpc` tree: registration, delivery, restart
-bun run test:herdr        # M1: layout, ranks, panes, worktrees, SHA reporting
-bun run test:herdr:m2     # M2: queue, integrator, pause, restart in place, retire
-bun run test:herdr:ui     # UI: status line, widget, /teams tree overlay and keys
-bun run test:herdr:auto   # one sentence to the personal leader, then outcome checks
-MODE=guards bun scripts/herdr-m3.ts   # also: budget | rebuild | fresh | bootstrap
-```
-
-The herdr suites open their own temporary workspaces with an isolated `OMP_TEAMS_HOME` and
-close them afterwards (`KEEP=1` keeps them for inspection). Run them inside a herdr pane.
-`test:herdr:auto` and the M3 modes spend real tokens.
-
-## Repository layout
-
-| Path | Contents |
-|---|---|
-| `src/db.ts` | SQLite schema and migrations (v7) |
-| `src/identity.ts` | project identity, rank labels, session tags |
-| `src/registry.ts` | members, seats, groups, visibility, liveness, revive |
-| `src/mail.ts` | mailbox and delivery policy |
-| `src/queue.ts` | task state machine, atomic claim, dependencies |
-| `src/worktree.ts`, `src/merge.ts` | git worktrees and the deterministic merge |
-| `src/policy.ts` | the `tool_call` guards for managers, integrators and workers |
-| `src/guard.ts` | brakes, spend ledger, price fallback |
-| `src/runtime.ts` | assignment, reports, patrol, closing, merge enqueueing |
-| `src/herdr.ts`, `src/spawn.ts` | herdr CLI client, launchers, layout |
-| `src/presence.ts`, `src/tree.ts` | status line, widget, `/teams tree` |
-| `src/report.ts` | daily report and audit export |
-| `src/rebuild.ts` | `/teams resume` machine recovery |
-| `src/commands.ts`, `src/tools.ts` | the `/teams` surface and agent tools |
+The file map, verification commands and conventions live in
+[docs/index.md](docs/index.md). User-facing usage stays in this README.
 
 ## Limitations
 
