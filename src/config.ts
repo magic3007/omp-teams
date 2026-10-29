@@ -56,10 +56,10 @@ export interface TeamsConfig {
 export const DEFAULT_CONFIG: TeamsConfig = {
 	models: {
 		role: {
-			personal: "deepseek/deepseek-flash",
-			project: "deepseek/deepseek-flash",
-			group: "deepseek/deepseek-flash",
-			integrator: "deepseek/deepseek-flash",
+			personal: "minimax-test/MiniMax-3.1-Flash",
+			project: "minimax-test/MiniMax-3.1-Flash",
+			group: "minimax-test/MiniMax-3.1-Flash",
+			integrator: "minimax-test/MiniMax-3.1-Flash",
 		},
 		routing: {
 			default: "deepseek/deepseek-v4-flash",
@@ -76,6 +76,8 @@ export const DEFAULT_CONFIG: TeamsConfig = {
 			},
 		},
 		allowed: [
+			"minimax-test/MiniMax-3.1-Flash",
+			"minimax-test/MiniMax-M78",
 			"deepseek/deepseek-flash",
 			"deepseek/deepseek-v4-flash",
 			"devin/claude-opus-5-5-fast",
