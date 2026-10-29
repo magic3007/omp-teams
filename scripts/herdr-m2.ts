@@ -6,7 +6,7 @@ import {
 	finish,
 	lastLines,
 	panes,
-	paneTail,
+	paneExists,
 	queryAll,
 	queryOne,
 	run,
@@ -182,12 +182,12 @@ async function main(): Promise<void> {
 		"w2 retired",
 	);
 	const w2Agent = queryOne<{ status: string }>(h, "SELECT status FROM agents WHERE seat = ? ORDER BY last_seen DESC LIMIT 1", [`worker:${w2?.id ?? ""}`]);
-	await waitFor(() => paneTail(w2?.pane_id ?? "", 30).includes("member stopped"), 30_000, "launcher stop message");
+	const paneClosed = await waitFor(() => !paneExists(w2?.pane_id ?? ""), 30_000, "retired pane closed");
 	check(
 		h,
-		"a retired worker leaves and its launcher stops instead of restarting",
-		retired && w2Agent?.status === "left" && paneTail(w2?.pane_id ?? "", 30).includes("member stopped"),
-		JSON.stringify({ slot: retired, agent: w2Agent?.status, tail: lastLines(w2?.pane_id ?? "", 2) }),
+		"a retired worker leaves and its launcher stops, closing the pane",
+		retired && w2Agent?.status === "left" && paneClosed,
+		JSON.stringify({ slot: retired, agent: w2Agent?.status, pane: w2?.pane_id }),
 	);
 	await Bun.sleep(5_000);
 	const workerRows = queryAll<{ label: string; status: string; seat: string; last_seen: number }>(

@@ -112,6 +112,11 @@ export function panes(h: Harness): HerdrPane[] {
 	return result.ok ? result.value : [];
 }
 
+export function paneExists(paneId: string): boolean {
+	if (!paneId) return false;
+	return Bun.spawnSync(["herdr", "pane", "get", paneId], { stdout: "pipe", stderr: "pipe" }).stdout.toString().includes(paneId);
+}
+
 export function run(h: Harness, paneId: string, command: string): void {
 	const result = h.herdr.runInPane(paneId, command);
 	if (!result.ok) throw new Error(result.error);

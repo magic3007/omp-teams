@@ -399,6 +399,12 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			if (!self) {
 				if (timer) ctx.clearTimer(timer);
 				timer = null;
+				void applyToolPolicy();
+				if (runtime.registry.byId(me.id)?.status === "left" && process.env.OMP_TEAMS_STOP) {
+					logEvent(db, "closed", { seat: me.seat }, me.id);
+					ctx.abort();
+					stopMember();
+				}
 				return;
 			}
 			renderPresence(ctx);

@@ -86,14 +86,17 @@ export function writeLaunchFile(path: string, content: string): void {
 	writeFileSync(path, content);
 }
 
-export function launcherScript(input: {
+export interface LauncherInput {
 	home: string;
 	tag: string;
 	cwd: string;
 	join: string;
 	model: string;
 	maxCostUsd?: number;
-}): string {
+	discardWorktree?: { repoRoot: string; branch: string };
+}
+
+export function launcherScript(input: LauncherInput): string {
 	const files = launchFiles(input.home, input.tag);
 	const args = ["omp", "--model", shq(input.model)];
 	if (input.maxCostUsd !== undefined && input.maxCostUsd > 0) {
@@ -116,6 +119,7 @@ export function launcherScript(input: {
 		"fi",
 		"fast=0",
 		"while :; do",
+		'  if [ -e "$OMP_TEAMS_STOP" ]; then rm -f "$OMP_TEAMS_STOP"; echo "omp-teams: member stopped"; break; fi',
 		"  started=$(date +%s)",
 		'  if [ -n "$target" ]; then',
 		`    ${run} --resume "$target"`,
@@ -127,16 +131,24 @@ export function launcherScript(input: {
 		'  if [ -e "$OMP_TEAMS_PARK" ]; then',
 		'    target=$(cat "$OMP_TEAMS_PARK")',
 		'    echo "omp-teams: parked; waiting for work"',
-		'    while [ ! -e "$OMP_TEAMS_WAKE" ]; do sleep 1; done',
+		'    while [ ! -e "$OMP_TEAMS_WAKE" ] && [ ! -e "$OMP_TEAMS_STOP" ]; do sleep 1; done',
 		'    rm -f "$OMP_TEAMS_WAKE" "$OMP_TEAMS_PARK"',
 		"    fast=0",
 		"    continue",
 		"  fi",
 		'  if [ $(( $(date +%s) - started )) -lt 15 ]; then fast=$((fast + 1)); else fast=0; fi',
-		'  if [ "$fast" -ge 3 ]; then echo "omp-teams: omp exited 3 times within 15s; not restarting"; break; fi',
+		'  if [ "$fast" -ge 3 ]; then echo "omp-teams: omp exited 3 times within 15s; not restarting"; exec "${SHELL:-/bin/sh}"; fi',
 		"  sleep 2",
 		"done",
 	];
+	if (input.discardWorktree) {
+		const git = `git -C ${shq(input.discardWorktree.repoRoot)}`;
+		lines.push(
+			"cd /",
+			`${git} worktree remove --force ${shq(input.cwd)} || ${git} worktree prune`,
+			`${git} branch -D ${shq(input.discardWorktree.branch)} >/dev/null`,
+		);
+	}
 	return `${lines.join("\n")}\n`;
 }
 
@@ -145,7 +157,7 @@ function unwrap<T>(result: HerdrResult<T>): T {
 	return result.value;
 }
 
-function writeLauncher(deps: SpawnDeps, seat: string, input: { cwd: string; join: string; model: string; maxCostUsd?: number }): string {
+function writeLauncher(deps: SpawnDeps, seat: string, input: Omit<LauncherInput, "home" | "tag">): string {
 	mkdirSync(join(deps.home, "launch"), { recursive: true });
 	const files = seatLaunchFiles(deps.home, seat);
 	const tag = launchTag(seat);
