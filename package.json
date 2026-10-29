@@ -1,0 +1,29 @@
+{
+  "name": "omp-teams",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Herdr-based multi-agent hierarchy for omp: personal -> project -> group -> worker",
+  "license": "MIT",
+  "omp": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "18.13.1"
+  },
+  "scripts": {
+    "test": "bun test",
+    "test:e2e": "bun scripts/e2e-smoke.ts",
+    "test:herdr": "bun scripts/herdr-smoke.ts",
+    "test:herdr:m2": "bun scripts/herdr-m2.ts",
+    "test:herdr:ui": "bun scripts/herdr-ui.ts",
+    "test:herdr:auto": "bun scripts/herdr-auto.ts",
+    "test:herdr:m3": "bun scripts/herdr-m3.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
+  }
+}
