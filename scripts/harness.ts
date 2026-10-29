@@ -111,6 +111,8 @@ export function panes(h: Harness): HerdrPane[] {
 export function run(h: Harness, paneId: string, command: string): void {
 	const result = h.herdr.runInPane(paneId, command);
 	if (!result.ok) throw new Error(result.error);
+	Bun.sleep(300);
+	Bun.spawnSync(["herdr", "pane", "send-keys", paneId, "enter"], { stdout: "ignore", stderr: "ignore" });
 }
 
 function agentStatus(paneId: string): string | null {
