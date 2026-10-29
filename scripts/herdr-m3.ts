@@ -24,6 +24,7 @@ const config: Record<string, string[]> = {
 		"    group: 0.3",
 	],
 	close: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
+	analyst: ["poll_ms: 700", "patrol_minutes: 0.2", "limits:", "  dead_after_seconds: 20", "guards:", "  budget:", "    daily_usd: 200"],
 };
 
 const h = createHarness(`m3-${mode}`, config[mode] ?? config.guards ?? []);
@@ -117,6 +118,42 @@ async function main(): Promise<void> {
 		const retired = queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM slots WHERE status != 'retired'")?.n ?? -1;
 		check(h, "every slot is retired", retired === 0, `${retired} slot(s) still active`);
 		check(h, "the personal leader keeps running", aliveCount(h, "personal") === 1 && paneExists(personalPane));
+		finish(h, "M3");
+	}
+
+	if (mode === "analyst") {
+		const projectSeat = queryOne<{ seat: string }>(h, "SELECT seat FROM agents WHERE role = 'project' AND status = 'alive'")?.seat ?? "";
+		run(h, personalPane, "/teams assign repo analysis simple What is the first line of README.md? Answer with that line only.");
+		const analystRow = (): { id: string; worktree: string; branch: string; pane_id: string | null; status: string } | null =>
+			queryOne(h, "SELECT id, worktree, branch, pane_id, status FROM slots WHERE kind = 'analyst' ORDER BY index_no LIMIT 1");
+		const started = await waitFor(() => analystRow() !== null, 300_000, "an analyst slot exists");
+		const slot = analystRow();
+		check(h, "the repo leader starts an analyst for the analysis task", started && slot !== null, lastLines(projectPane, 4));
+		if (!slot) finish(h, "M3");
+		const parentOf = (): string | null =>
+			queryOne<{ parent_seat: string }>(h, "SELECT parent_seat FROM agents WHERE seat = ?", [`worker:${slot.id}`])?.parent_seat ?? null;
+		const registered = await waitFor(() => parentOf() !== null, 180_000, "the analyst registered");
+		check(h, "the analyst reports to the repo leader", registered && parentOf() === projectSeat, parentOf() ?? "unregistered");
+		check(h, "the analyst works on its own branch", slot.branch.startsWith("teams-a/"), slot.branch);
+		const answered = await waitFor(
+			() => (queryOne<{ n: number }>(h, "SELECT COUNT(*) AS n FROM tasks WHERE kind = 'analysis' AND to_seat = ? AND status = 'done'", [`worker:${slot.id}`])?.n ?? 0) === 1,
+			600_000,
+			"the analyst answered",
+		);
+		check(h, "the analyst answers and reports done", answered, lastLines(slot.pane_id ?? projectPane, 4));
+		const retired = await waitFor(() => analystRow()?.status === "retired" && !existsSync(slot.worktree), 120_000, "analyst retired");
+		check(h, "the analyst retires and its worktree is removed", retired, slot.worktree);
+		const paneGone = await waitFor(() => !paneExists(slot.pane_id ?? ""), 60_000, "analyst pane gone");
+		check(h, "the analyst pane closes", paneGone, slot.pane_id ?? "-");
+		const delivered = await waitFor(
+			() =>
+				queryAll<{ body: string }>(h, "SELECT body FROM messages WHERE to_seat = 'personal' AND kind = 'report'").some((row) =>
+					row.body.includes("# repo"),
+				),
+			400_000,
+			"the answer reached the personal leader",
+		);
+		check(h, "the answer reaches the personal leader", delivered, lastLines(personalPane, 4));
 		finish(h, "M3");
 	}
 

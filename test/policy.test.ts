@@ -15,7 +15,7 @@ const homeBounds: WorkerBounds = {
 };
 
 const bash = (command: string, cwd?: string, within: WorkerBounds = bounds) =>
-	workerBlockReason("bash", { command, ...(cwd ? { cwd } : {}) }, within);
+	workerBlockReason("worker", "bash", { command, ...(cwd ? { cwd } : {}) }, within);
 
 describe("worker guard", () => {
 	test("the git commands that rewrote a group branch in testing are blocked", () => {
@@ -50,18 +50,18 @@ describe("worker guard", () => {
 	});
 
 	test("file edits outside the worker's worktree are blocked, scratch space is not", () => {
-		expect(workerBlockReason("write", { path: "/src/repo/colors.txt", content: "x" }, bounds)).toContain("outside their own worktree");
-		expect(workerBlockReason("edit", { path: "/teams/wt/p-1/feat-x/group/a.ts" }, bounds)).toContain("outside their own worktree");
-		expect(workerBlockReason("edit", { paths: ["/teams/wt/p-1/feat-x/w1/a.ts", "/teams/wt/p-1/feat-x/w2/b.ts"] }, bounds)).toContain(
+		expect(workerBlockReason("worker", "write", { path: "/src/repo/colors.txt", content: "x" }, bounds)).toContain("outside their own worktree");
+		expect(workerBlockReason("worker", "edit", { path: "/teams/wt/p-1/feat-x/group/a.ts" }, bounds)).toContain("outside their own worktree");
+		expect(workerBlockReason("worker", "edit", { paths: ["/teams/wt/p-1/feat-x/w1/a.ts", "/teams/wt/p-1/feat-x/w2/b.ts"] }, bounds)).toContain(
 			"w2/b.ts",
 		);
-		expect(workerBlockReason("write", { path: "/teams/wt/p-1/feat-x/w1/colors.txt", content: "x" }, bounds)).toBeNull();
-		expect(workerBlockReason("write", { path: "/tmp/scratch.txt", content: "x" }, bounds)).toBeNull();
-		expect(workerBlockReason("write", { path: "relative/colors.txt", content: "x" }, bounds)).toBeNull();
+		expect(workerBlockReason("worker", "write", { path: "/teams/wt/p-1/feat-x/w1/colors.txt", content: "x" }, bounds)).toBeNull();
+		expect(workerBlockReason("worker", "write", { path: "/tmp/scratch.txt", content: "x" }, bounds)).toBeNull();
+		expect(workerBlockReason("worker", "write", { path: "relative/colors.txt", content: "x" }, bounds)).toBeNull();
 	});
 
 	test("the built-in ask tool is blocked for every worker", () => {
-		expect(workerBlockReason("ask", {}, null)).toContain("teams_ask");
+		expect(workerBlockReason("worker", "ask", {}, null)).toContain("teams_ask");
 	});
 });
 
@@ -105,9 +105,9 @@ describe("leader and integrator routing guards", () => {
 	});
 
 	test("a worker reports but never routes", () => {
-		expect(workerBlockReason("teams_forward", {}, bounds)).toContain("workers do not route");
-		expect(workerBlockReason("teams_assign", {}, bounds)).toContain("workers do not route");
-		expect(workerBlockReason("teams_report", {}, bounds)).toBeNull();
+		expect(workerBlockReason("worker", "teams_forward", {}, bounds)).toContain("workers do not route");
+		expect(workerBlockReason("worker", "teams_assign", {}, bounds)).toContain("workers do not route");
+		expect(workerBlockReason("worker", "teams_report", {}, bounds)).toBeNull();
 	});
 });
 

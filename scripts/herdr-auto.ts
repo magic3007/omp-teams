@@ -148,11 +148,14 @@ async function main(): Promise<void> {
 		lastPolicy.set(seat, parsed.active.filter((name): name is string => typeof name === "string"));
 	}
 	const workTools = ["bash", "edit", "write", "ast_edit", "read", "grep", "find", "glob", "web_search", "lsp", "todo", "task", "debug", "ida"];
-	const leaking = [...lastPolicy].filter(([, active]) => active.some((tool) => workTools.includes(tool)));
+	const leaderSeats = ["personal", "project", "group"];
+	const leaking = [...lastPolicy].filter(
+		([seat, active]) => leaderSeats.includes(seat) && active.some((tool) => workTools.includes(tool)),
+	);
 	check(
 		h,
 		"no leader has a research or execution tool",
-		["personal", "project", "group"].every((role) => lastPolicy.has(role)) && leaking.length === 0,
+		leaderSeats.every((role) => lastPolicy.has(role)) && leaking.length === 0,
 		leaking.map(([role, active]) => `${role}: ${active.join(",")}`).join(" | ") || [...lastPolicy].map(([role, active]) => `${role}: ${active.join(",")}`).join(" | "),
 	);
 	check(

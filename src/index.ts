@@ -8,6 +8,7 @@ import type { TeamsHost } from "./host";
 import { PARKED_GLYPH, resolveProject } from "./identity";
 import { decideDelivery, type MailRow, mailBody, persistedMsgIds, renderMail } from "./mail";
 import {
+	isHandsOnSeat,
 	isManagerRole,
 	isTeamsTool,
 	leaderBlockReason,
@@ -91,13 +92,9 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		stopMember,
 	};
 
-	function isIntegrator(agent: AgentRow): boolean {
-		return agent.role === "worker" && runtime.slotOf(agent)?.kind === "integrator";
-	}
-
 	function toolSeat(agent: AgentRow): ToolSeat {
 		if (agent.role !== "worker") return agent.role;
-		return isIntegrator(agent) ? "integrator" : "worker";
+		return runtime.slotOf(agent)?.kind ?? "worker";
 	}
 
 	function stopMember(): void {
@@ -129,12 +126,11 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		}
 		const seat = toolSeat(self);
 		const rest = base.filter((name) => !isTeamsTool(name));
-		const active =
-			seat === "worker"
-				? [...rest, ...TEAMS_TOOLS_FOR.worker].filter((name) => name !== "ask")
-				: [...TEAMS_TOOLS_FOR[seat]];
+		const active = isHandsOnSeat(seat)
+			? [...rest, ...TEAMS_TOOLS_FOR[seat]].filter((name) => name !== "ask")
+			: [...TEAMS_TOOLS_FOR[seat]];
 		await pi.setActiveTools(active);
-		logEvent(db, "tools:policy", { role: self.role, integrator: seat === "integrator", active }, self.id);
+		logEvent(db, "tools:policy", { role: self.role, seat, active }, self.id);
 	}
 
 	async function applyTaskModel(ctx: ExtensionContext, rows: MailRow[]): Promise<void> {
@@ -251,9 +247,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		const slot = runtime.slotOf(me);
 		if (!slot) return;
 		if (slot.status === "retiring") {
-			runtime.slots.setStatus(slot.id, "retired");
-			runtime.leave(me);
-			logEvent(db, "retire", { slot: slot.id }, me.id);
+			runtime.retireSlot(me);
 			stopMember();
 			return;
 		}
@@ -476,7 +470,7 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 			systemPrompt: [
 				...ctx.getSystemPrompt(),
 				systemPromptFor(self, {
-					integrator: slot?.kind === "integrator",
+					slotKind: slot?.kind,
 					workplace: slot ? { worktree: slot.worktree, branch: slot.branch } : undefined,
 				}),
 			],
@@ -510,10 +504,9 @@ export default function teamsExtension(pi: ExtensionAPI): void {
 		const me = self;
 		if (!me) return;
 		const seat = toolSeat(me);
-		const reason =
-			seat === "worker"
-				? workerBlockReason(event.toolName, event.input, workerBounds(me))
-				: leaderBlockReason(seat, event.toolName);
+		const reason = isHandsOnSeat(seat)
+			? workerBlockReason(seat, event.toolName, event.input, workerBounds(me))
+			: leaderBlockReason(seat, event.toolName);
 		if (reason) {
 			logEvent(db, "block", { tool: event.toolName, role: me.role, reason }, me.id);
 			return { block: true, reason };

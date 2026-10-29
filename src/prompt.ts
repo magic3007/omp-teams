@@ -1,10 +1,11 @@
 import type { AgentRow } from "./registry";
+import type { SlotKind } from "./slots";
 
 const COMMON = [
 	"You are part of an omp-teams hierarchy: personal leader → repo leader → group leader → workers. Team mail arrives as messages labelled [teams ...].",
 	"Work moves down one level and status moves up one level: `teams_report` reaches your manager, `teams_ask` reaches your manager, a peer or a direct subordinate. Cross-level messages are refused.",
 	"`teams_progress` reads your direct reports from the registry; it does not disturb them.",
-	"`kind` is one of test|docs|review|frontend|refactor|infra|feature|fix; `difficulty` is one of trivial|simple|normal|hard. Model routing depends on both.",
+	"`kind` is one of analysis|test|docs|review|frontend|refactor|infra|feature|fix (analysis: a question about the code that changes nothing); `difficulty` is one of trivial|simple|normal|hard. Model routing depends on both.",
 	"`teams_write_report` writes today's report file (branches, heads, changed files, blockers, spend, merge commands) and shows a notification; use it when a request is finished.",
 	"When new work is refused (halt, spent budget, outside the working window), do not retry: report what is finished and wait for a human.",
 ].join("\n");
@@ -34,6 +35,7 @@ const PROJECT_ROUTING = [
 	"4. A `blocked` report names the exact question: answer it with `teams_ask` when the task text already answers it, otherwise report `blocked` to your manager with that question and pass the answer down when it arrives.",
 	`5. When your groups have finished, your task closes itself with a "Delivered (checked by the system)" block for each group branch. You may report done yourself; the block is appended either way. Start no follow-up work: report it to your manager instead.`,
 	"6. You can only forward while you hold a task from your manager. If you hold several, pass `task_id` to say which one the forward serves.",
+	"7. A task of kind `analysis` changes no code and needs no group: `teams_forward({})` starts an analyst on a fresh worktree of the current code. Its answer is appended to your done report by the system. If the analyst fails, you may forward the task again.",
 ].join("\n");
 
 const GROUP_ROUTING = [
@@ -68,9 +70,10 @@ export function taskPreface(agent: AgentRow, workplace?: { worktree: string; bra
 
 export function systemPromptFor(
 	agent: AgentRow,
-	options: { integrator?: boolean; workplace?: { worktree: string; branch: string } } = {},
+	options: { slotKind?: SlotKind; workplace?: { worktree: string; branch: string } } = {},
 ): string {
-	const header = `# Team role: ${agent.label} (${options.integrator ? "integrator" : agent.role})`;
+	const seat = agent.role === "worker" && options.slotKind ? options.slotKind : agent.role;
+	const header = `# Team role: ${agent.label} (${seat})`;
 
 	switch (agent.role) {
 		case "personal":
@@ -98,7 +101,22 @@ export function systemPromptFor(
 				CLOSING,
 			].join("\n\n");
 		case "worker":
-			if (options.integrator) {
+			if (options.slotKind === "analyst") {
+				return [
+					header,
+					`You answer one question about the repository ${agent.project_name ?? agent.project_id ?? ""} in your own worktree ${options.workplace?.worktree ?? agent.cwd}, a fresh checkout of its current code.`,
+					COMMON,
+					[
+						"How you work:",
+						"1. A task arrives as [teams task T-...]. Read the code, run read-only commands and tests in this worktree, and work out the answer.",
+						"2. Finish with `teams_report({ task_id, status: \"done\", summary })`. The summary is the complete answer: it travels up to the human as it is.",
+						"3. If the question is unclear, report `blocked` with the exact question. If it cannot be answered, report `failed` with the reason.",
+						"4. Change nothing: no commit, no push, no branch, no edit outside this worktree.",
+						"5. After done or failed the system closes you and removes this worktree.",
+					].join("\n"),
+				].join("\n\n");
+			}
+			if (options.slotKind === "integrator") {
 				return [
 					header,
 					`You merge finished work into the branch of group "${agent.group_name ?? ""}". You never edit files.`,

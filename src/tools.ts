@@ -38,7 +38,9 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 			.string()
 			.describe("Repository the request belongs to: its name the way the human said it, or its path. The repo leader is started if it does not exist."),
 		task: z.string().describe("The human's request word for word. Do not plan, split or reword it."),
-		kind: z.enum(ASSIGNABLE_KINDS).describe("Work direction, e.g. feature, fix, refactor, test, docs"),
+		kind: z
+			.enum(ASSIGNABLE_KINDS)
+			.describe("Work direction, e.g. feature, fix, refactor, test, docs; analysis for a question about the code that changes nothing"),
 		difficulty: z.enum(TASK_DIFFICULTIES).describe("Difficulty tier used for model routing"),
 		paths: z.array(z.string()).optional().describe("Files or paths the request names, for path_rules routing"),
 		model: z.string().optional().describe("Explicit model override; must be listed in models.allowed"),
@@ -48,7 +50,7 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 		group: z
 			.string()
 			.optional()
-			.describe("Group that should do the work (lowercase letters, digits and \"-\"). A repo leader names it; the group leader is started if it does not exist. A group leader leaves this out."),
+			.describe("Group that should do the work (lowercase letters, digits and \"-\"). A repo leader names it; the group leader is started if it does not exist. A group leader leaves this out, and so does a repo leader forwarding an analysis task."),
 		task_id: z.string().optional().describe("Held task to forward. Needed only when you hold more than one."),
 	});
 
@@ -123,7 +125,7 @@ export function registerTeamsTools(pi: ExtensionAPI, host: TeamsHost, spawnDeps:
 		name: "teams_forward",
 		label: "Forward the task you hold",
 		description:
-			"Repo and group leaders: pass the task you hold down one level, unchanged. A repo leader names the group and a missing group leader is started; a group leader queues into its own group and a missing worker is started. kind, difficulty, paths and model travel with the task.",
+			"Repo and group leaders: pass the task you hold down one level, unchanged. A repo leader names the group and a missing group leader is started; an analysis task goes to a new analyst on a fresh worktree instead. A group leader queues into its own group and a missing worker is started. kind, difficulty, paths and model travel with the task.",
 		parameters: forwardSchema,
 		defaultInactive: true,
 		execute: async (_toolCallId, params) => {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import type { SlotKind } from "./slots";
 
 export type Role = "personal" | "project" | "group" | "worker";
 export const ROLES: Role[] = ["personal", "project", "group", "worker"];
@@ -94,8 +95,8 @@ export function parentSeatFor(
 			if (!projectId) throw new Error("group role requires a project id");
 			return { seat: projectSeat(projectId), role: "project" };
 		case "worker":
-			if (!projectId || !group) throw new Error("worker role requires a project id and a group name");
-			return { seat: groupSeat(projectId, group), role: "group" };
+			if (!projectId) throw new Error("worker role requires a project id");
+			return group ? { seat: groupSeat(projectId, group), role: "group" } : { seat: projectSeat(projectId), role: "project" };
 	}
 }
 
@@ -121,7 +122,7 @@ export const ROLE_TITLE: Record<Role, string> = {
 
 export function labelFor(
 	role: Role,
-	options: { projectName?: string; group?: string; index?: number; integrator?: boolean },
+	options: { projectName?: string; group?: string; index?: number; slot?: SlotKind },
 ): string {
 	switch (role) {
 		case "personal":
@@ -131,9 +132,14 @@ export function labelFor(
 		case "group":
 			return `${RANK_GLYPH.group} ${ROLE_TITLE.group} · ${options.group ?? "group"}`;
 		case "worker":
-			return options.integrator
-				? `${RANK_GLYPH.worker} integrator · ${options.group ?? "group"}`
-				: `${RANK_GLYPH.worker} ${ROLE_TITLE.worker} ${options.index ?? 1} · ${options.group ?? "group"}`;
+			switch (options.slot ?? "worker") {
+				case "integrator":
+					return `${RANK_GLYPH.worker} integrator · ${options.group ?? "group"}`;
+				case "analyst":
+					return `${RANK_GLYPH.worker} analyst ${options.index ?? 1} · ${options.projectName ?? "repo"}`;
+				case "worker":
+					return `${RANK_GLYPH.worker} ${ROLE_TITLE.worker} ${options.index ?? 1} · ${options.group ?? "group"}`;
+			}
 	}
 }
 

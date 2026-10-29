@@ -1,11 +1,11 @@
 import type { TaskDifficulty, TaskKind } from "./config";
-import { groupSeat, labelFor, projectSeat } from "./identity";
+import { groupSeat, labelFor, projectSeat, workerSeat } from "./identity";
 import { isManagerRole } from "./policy";
 import { taskPaths, type TaskRow } from "./queue";
 import type { AgentRow } from "./registry";
 import { findRepository } from "./repos";
 import { NO_OPEN_TASK, type TeamsRuntime } from "./runtime";
-import { spawnGroup, spawnProject, spawnWorker, relaunchSeat, type SpawnDeps } from "./spawn";
+import { spawnAnalyst, spawnGroup, spawnProject, spawnWorker, relaunchSeat, type SpawnDeps } from "./spawn";
 
 export interface RouteDeps {
 	runtime: TeamsRuntime;
@@ -136,6 +136,15 @@ async function ensureGroupLeader(deps: RouteDeps, actor: AgentRow, name: string)
 	return { ok: true, agent, started: agent.label };
 }
 
+async function startAnalyst(deps: RouteDeps, actor: AgentRow, taskId: string): Promise<Ensured> {
+	if (!deps.spawn) return { ok: false, error: "starting an analyst needs a herdr pane." };
+	const spawned = spawnAnalyst(deps.spawn, actor, taskId);
+	if (!spawned.ok) return spawned;
+	const agent = await deps.awaitMember(workerSeat(spawned.value.slotId));
+	if (!agent) return { ok: false, error: `the analyst for ${taskId} did not register in time.` };
+	return { ok: true, agent, started: agent.label };
+}
+
 function ensureWorker(deps: RouteDeps, actor: AgentRow): { ok: true; started: string | null } | { ok: false; error: string } {
 	if (!actor.project_id || !actor.group_name) return { ok: false, error: `${actor.label} is not bound to a group.` };
 	const existing = deps.runtime.slots
@@ -234,6 +243,11 @@ export async function forwardTask(deps: RouteDeps, actor: AgentRow, request: For
 		const ensured = ensureWorker(deps, actor);
 		if (!ensured.ok) return ensured;
 		return deliver(deps, actor, null, delivery, ensured.started);
+	}
+	if (picked.kind === "analysis") {
+		const analyst = await startAnalyst(deps, actor, picked.id);
+		if (!analyst.ok) return analyst;
+		return deliver(deps, actor, analyst.agent, delivery, analyst.started);
 	}
 	const group = request.group?.trim();
 	if (!group) return { ok: false, error: "name the group this task goes to." };

@@ -21,12 +21,18 @@ const REPO_TAB = `${RANK_GLYPH.project} ${ROLE_TITLE.project}`;
 
 const GROUP_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-function workerTabLabel(groupName: string): string {
+export function workerTabLabel(groupName: string): string {
 	return `${RANK_GLYPH.worker} workers · ${groupName}`;
 }
 
+export const ANALYST_TAB = `${RANK_GLYPH.worker} analysts`;
+
 function shq(value: string): string {
 	return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+export function launchCommand(script: string): string {
+	return `exec sh ${shq(script)}`;
 }
 
 export function encodeJoin(fields: Record<string, string | number | undefined>): string {
@@ -207,7 +213,7 @@ export function spawnProject(
 		const workspaceId = deps.runtime.registry.projectWorkspace(project.id);
 		if (workspaceId) {
 			const tab = unwrap(deps.herdr.createTab(workspaceId, project.root, REPO_TAB));
-			unwrap(deps.herdr.runInPane(tab.paneId, `sh ${shq(script)}`));
+			unwrap(deps.herdr.runInPane(tab.paneId, launchCommand(script)));
 			deps.runtime.registry.upsertProject(project.id, project.name, project.root);
 			return { ok: true, value: { project, workspaceId, tabId: tab.tabId, paneId: tab.paneId, script } };
 		}
@@ -215,7 +221,7 @@ export function spawnProject(
 		if (!workspace.workspaceId) return { ok: false, error: "herdr did not return a workspace id" };
 		unwrap(deps.herdr.renameTab(workspace.tabId, REPO_TAB));
 		unwrap(deps.herdr.renameWorkspace(workspace.workspaceId, project.name));
-		unwrap(deps.herdr.runInPane(workspace.paneId, `sh ${shq(script)}`));
+		unwrap(deps.herdr.runInPane(workspace.paneId, launchCommand(script)));
 		deps.runtime.registry.upsertProject(project.id, project.name, project.root);
 		deps.runtime.registry.setProjectWorkspace(project.id, workspace.workspaceId);
 		return {
@@ -282,7 +288,7 @@ export function spawnGroup(
 
 	try {
 		const tab = unwrap(deps.herdr.createTab(workspaceId, worktreePath, labelFor("group", { group: options.name })));
-		unwrap(deps.herdr.runInPane(tab.paneId, `sh ${shq(script)}`));
+		unwrap(deps.herdr.runInPane(tab.paneId, launchCommand(script)));
 		deps.runtime.registry.setGroupLayout(actor.project_id, options.name, {
 			workspaceId,
 			tabId: tab.tabId,
@@ -314,7 +320,7 @@ export function relaunchSeat(deps: SpawnDeps, holder: AgentRow): SpawnOutcome<Re
 	const label = holder.role === "project" ? REPO_TAB : labelFor("group", { group: holder.group_name ?? "group" });
 	const tab = deps.herdr.createTab(workspaceId, cwd, label);
 	if (!tab.ok) return tab;
-	const ran = deps.herdr.runInPane(tab.value.paneId, `sh ${shq(files.script)}`);
+	const ran = deps.herdr.runInPane(tab.value.paneId, launchCommand(files.script));
 	if (!ran.ok) return ran;
 	deps.runtime.registry.setPane(holder.id, tab.value.paneId);
 	if (holder.role === "group" && holder.project_id && holder.group_name) {
@@ -393,12 +399,11 @@ export function spawnWorker(deps: SpawnDeps, actor: AgentRow, options: { count?:
 		try {
 			const placement = placeWorkerPane(deps, {
 				workspaceId,
-				projectId,
-				groupName,
+				tabLabel: workerTabLabel(groupName),
 				cwd: worktreePath,
 				slots: deps.runtime.slots.forGroup(projectId, groupName, "worker"),
 			});
-			unwrap(deps.herdr.runInPane(placement.paneId, `sh ${shq(script)}`));
+			unwrap(deps.herdr.runInPane(placement.paneId, launchCommand(script)));
 			deps.runtime.slots.bind(slot.id, { paneId: placement.paneId, tabId: placement.tabId });
 			unwrap(deps.herdr.renamePane(placement.paneId, labelFor("worker", { group: groupName, index })));
 			spawned.push({
@@ -437,8 +442,8 @@ export function spawnIntegrator(deps: SpawnDeps, actor: AgentRow, group: GroupRo
 	});
 	try {
 		const pane = unwrap(deps.herdr.splitPane(anchor, group.worktree, "down"));
-		unwrap(deps.herdr.runInPane(pane.paneId, `sh ${shq(script)}`));
-		unwrap(deps.herdr.renamePane(pane.paneId, labelFor("worker", { group: actor.group_name, integrator: true })));
+		unwrap(deps.herdr.runInPane(pane.paneId, launchCommand(script)));
+		unwrap(deps.herdr.renamePane(pane.paneId, labelFor("worker", { group: actor.group_name, slot: "integrator" })));
 		deps.runtime.slots.bind(slot.id, { paneId: pane.paneId, tabId: pane.tabId });
 		return {
 			ok: true,
@@ -457,12 +462,57 @@ export function spawnIntegrator(deps: SpawnDeps, actor: AgentRow, group: GroupRo
 	}
 }
 
+export function spawnAnalyst(deps: SpawnDeps, actor: AgentRow, taskId: string): SpawnOutcome<SpawnedWorker> {
+	const allowed = requireRole(actor, "project");
+	if (!allowed.ok) return allowed;
+	const stopped = deps.runtime.stopReason(actor);
+	if (stopped) return { ok: false, error: `nothing is spawned: ${stopped}.` };
+	if (!actor.project_id) return { ok: false, error: `${actor.label} has no project id` };
+	const projectId = actor.project_id;
+	const projectRoot = deps.runtime.registry.projectRoot(projectId);
+	if (!projectRoot) return { ok: false, error: `project root unknown for ${actor.label}` };
+	const workspaceId = deps.runtime.registry.projectWorkspace(projectId);
+	if (!workspaceId) return { ok: false, error: `${actor.label} has no herdr workspace for an analyst` };
+
+	const analysts = deps.runtime.slots.analystsOf(projectId);
+	const index = analysts.length + 1;
+	const name = `${index}-${taskId}`;
+	const worktreePath = resolve(deps.config.worktree_root, projectId, "analysis", name);
+	const branch = `teams-a/${name}`;
+	const worktree = addWorktree(projectRoot, worktreePath, branch, currentBranch(projectRoot) ?? "HEAD");
+	if (!worktree.ok) return { ok: false, error: worktree.error ?? "analyst worktree creation failed" };
+	const slot = deps.runtime.slots.ensure({ projectId, group: null, kind: "analyst", index, worktree: worktreePath, branch });
+	const script = writeLauncher(deps, workerSeat(slot.id), {
+		cwd: worktreePath,
+		join: encodeJoin({ role: "worker", project: projectId, slot: slot.id }),
+		model: deps.config.models.routing.default,
+		maxCostUsd: deps.config.limits.worker_max_cost_usd,
+		discardWorktree: { repoRoot: projectRoot, branch },
+	});
+	try {
+		const placement = placeWorkerPane(deps, {
+			workspaceId,
+			tabLabel: ANALYST_TAB,
+			cwd: worktreePath,
+			slots: analysts,
+		});
+		unwrap(deps.herdr.runInPane(placement.paneId, launchCommand(script)));
+		deps.runtime.slots.bind(slot.id, { paneId: placement.paneId, tabId: placement.tabId });
+		unwrap(deps.herdr.renamePane(placement.paneId, labelFor("worker", { projectName: actor.project_name ?? undefined, index, slot: "analyst" })));
+		return {
+			ok: true,
+			value: { slotId: slot.id, index, worktree: worktreePath, branch, paneId: placement.paneId, tabId: placement.tabId, script },
+		};
+	} catch (error) {
+		return { ok: false, error: (error as Error).message };
+	}
+}
+
 function placeWorkerPane(
 	deps: SpawnDeps,
 	input: {
 		workspaceId: string;
-		projectId: string;
-		groupName: string;
+		tabLabel: string;
 		cwd: string;
 		slots: { tab_id: string | null; pane_id: string | null; status: string }[];
 	},
@@ -470,6 +520,7 @@ function placeWorkerPane(
 	const perTab = Math.max(1, deps.config.limits.workers_per_tab);
 	const byTab = new Map<string, string[]>();
 	for (const slot of input.slots) {
+		if (slot.status === "retired") continue;
 		if (!slot.tab_id || !slot.pane_id) continue;
 		const panes = byTab.get(slot.tab_id) ?? [];
 		panes.push(slot.pane_id);
@@ -483,8 +534,7 @@ function placeWorkerPane(
 			return { paneId: split.paneId, tabId: split.tabId };
 		}
 	}
-	const base = workerTabLabel(input.groupName);
-	const label = byTab.size === 0 ? base : `${base} (${byTab.size + 1})`;
+	const label = byTab.size === 0 ? input.tabLabel : `${input.tabLabel} (${byTab.size + 1})`;
 	const tab = unwrap(deps.herdr.createTab(input.workspaceId, input.cwd, label));
 	return { paneId: tab.paneId, tabId: tab.tabId };
 }

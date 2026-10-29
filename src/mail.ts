@@ -202,6 +202,14 @@ export class Mailer {
 			)
 			.all(toSeat, limit) as MailRow[];
 	}
+
+	latestReport(taskId: string): MailRow | null {
+		return (
+			(this.db
+				.query("SELECT * FROM messages WHERE task_id = ? AND kind = 'report' ORDER BY created_at DESC, rowid DESC LIMIT 1")
+				.get(taskId) as MailRow | null) ?? null
+		);
+	}
 }
 
 export function persistedMsgIds(entries: Iterable<{ type?: string; customType?: string; details?: unknown }>): string[] {

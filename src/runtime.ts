@@ -67,6 +67,7 @@ export type CloseResult = { ok: true; closed: AgentRow[]; cancelled: string[] } 
 export interface PatrolResult {
 	inherited: string[];
 	requeued: string[];
+	abandoned: string[];
 	blocked: string[];
 	escalated: string[];
 	stalled: string[];
@@ -300,6 +301,14 @@ export class TeamsRuntime {
 
 	leave(agent: AgentRow): void {
 		this.registry.markStatus(agent.id, "left");
+	}
+
+	retireSlot(agent: AgentRow): void {
+		const slot = this.slotOf(agent);
+		if (!slot) return;
+		this.slots.setStatus(slot.id, "retired");
+		this.leave(agent);
+		logEvent(this.options.db, "retire", { slot: slot.id }, agent.id, this.now());
 	}
 
 	park(agent: AgentRow): { ok: true } | { ok: false; error: string } {
@@ -576,6 +585,7 @@ export class TeamsRuntime {
 
 	private applyReport(viewer: AgentRow, task: TaskRow, request: ReportRequest): string | undefined {
 		const config = this.configOf(viewer);
+		const slot = this.slotOf(viewer);
 		switch (request.status) {
 			case "progress":
 				this.queue.touch(task.id);
@@ -585,6 +595,11 @@ export class TeamsRuntime {
 				this.queue.block(task.id);
 				return undefined;
 			case "failed": {
+				if (slot?.kind === "analyst") {
+					this.queue.failTerminal(task.id);
+					this.slots.setStatus(slot.id, "retiring");
+					return `task ${task.id} failed; the analyst is closed and its worktree removed.`;
+				}
 				const outcome = this.queue.fail(task.id, config.max_task_failures);
 				return outcome.status === "queued"
 					? `task ${task.id} returned to the queue (attempt ${outcome.attempts} of ${config.max_task_failures}).`
@@ -593,8 +608,8 @@ export class TeamsRuntime {
 			case "done": {
 				this.queue.done(task.id, request.sha ?? null);
 				const cancelled = this.cancelOpenDescendants(task, viewer);
-				const slot = this.slotOf(viewer);
 				if (slot) this.slots.incrementDone(slot.id);
+				if (slot?.kind === "analyst") this.slots.setStatus(slot.id, "retiring");
 				const note = cancelled > 0 ? `${cancelled} open task(s) under ${task.id} were cancelled.` : undefined;
 				if (!request.sha || task.kind === "merge" || viewer.role !== "worker" || slot?.kind !== "worker") return note;
 				const merge = this.enqueueMerge(viewer, task, request.sha);
@@ -904,6 +919,7 @@ export class TeamsRuntime {
 		const result: PatrolResult = {
 			inherited: [],
 			requeued: [],
+			abandoned: [],
 			blocked: [],
 			escalated: [],
 			stalled: [],
@@ -930,6 +946,23 @@ export class TeamsRuntime {
 							if (fresh) this.sendTaskMail(fresh, manager.id, manager.seat, holder.seat, holder.id);
 						})();
 						result.inherited.push(task.id);
+					} else if (task.kind === "analysis" && task.to_seat) {
+						const seat = task.to_seat;
+						this.options.db.transaction(() => {
+							this.queue.failTerminal(task.id);
+							this.slots.setStatus(slotOfSeat(seat) ?? "", "retired");
+							this.mailer.send({
+								fromAgent: manager.id,
+								fromSeat: manager.seat,
+								toSeat: manager.seat,
+								toAgent: manager.id,
+								kind: "notice",
+								taskId: task.id,
+								body: { text: `The analyst of ${task.id} (${task.title}) is gone and the task failed. Forward the task you hold again to start a new analyst.` },
+							});
+						})();
+						if (launchTag(seat)) writeLaunchFile(seatLaunchFiles(this.home, seat).stop, `${now}\n`);
+						result.abandoned.push(task.id);
 					} else if (task.status === "assigned" && task.to_seat) {
 						this.queue.reassignToSeat(task.id, task.attempts);
 					} else {
@@ -983,7 +1016,7 @@ export class TeamsRuntime {
 		}
 
 		result.drained = this.closeIfDrained(manager);
-		if (result.inherited.length + result.requeued.length + result.blocked.length + result.escalated.length + result.guards.length > 0) {
+		if (result.inherited.length + result.requeued.length + result.abandoned.length + result.blocked.length + result.escalated.length + result.guards.length > 0) {
 			logEvent(this.options.db, "patrol", result, manager.id, now);
 		}
 		return result;
@@ -1056,11 +1089,18 @@ export class TeamsRuntime {
 			if (work.length === 0 || work.some((task) => task.status !== "done")) continue;
 			if (this.now() - Math.max(...work.map((task) => task.updated_at)) < CLOSE_GRACE_MS) continue;
 			const head = manager.role === "group" ? branchHead(this.groupOf(manager)?.worktree ?? this.worktreeFor(manager)) : null;
+			const answers = work
+				.filter((task) => task.kind === "analysis" && task.parent_task === received.id)
+				.map((task) => {
+					const report = this.mailer.latestReport(task.id);
+					return report ? `Answer from ${task.id}:\n${describeReport(report).summary}` : null;
+				})
+				.filter((answer): answer is string => answer !== null);
 			const reported = this.report(manager, {
 				taskId: received.id,
 				status: "done",
 				sha: head ?? undefined,
-				summary: `all ${work.length} task(s) created for ${received.id} are done.`,
+				summary: [`all ${work.length} task(s) created for ${received.id} are done.`, ...answers].join("\n\n"),
 			});
 			if (reported.ok) closed = true;
 		}
@@ -1176,7 +1216,7 @@ export class TeamsRuntime {
 	forwardable(agent: AgentRow): TaskRow[] {
 		return this.queue
 			.heldAll(agent.id, agent.seat)
-			.filter((task) => !this.queue.children(task.id).some((child) => child.status !== "cancelled"));
+			.filter((task) => this.queue.children(task.id).every((child) => child.status === "cancelled" || child.status === "failed"));
 	}
 
 	queueText(agent: AgentRow): string {

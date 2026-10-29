@@ -9,6 +9,7 @@ import {
 	seatFor,
 	shortId,
 } from "./identity";
+import type { SlotKind } from "./slots";
 
 export type AgentStatus = "alive" | "parked" | "dead" | "left";
 
@@ -43,7 +44,7 @@ export interface RegisterInput {
 	group?: string | null;
 	slotId?: string | null;
 	index?: number;
-	slotKind?: "worker" | "integrator";
+	slotKind?: SlotKind;
 	force?: boolean;
 	takeoverPane?: string | null;
 }
@@ -204,7 +205,7 @@ export class Registry {
 			projectName: input.projectName ?? undefined,
 			group: input.group ?? undefined,
 			index,
-			integrator: input.slotKind === "integrator",
+			slot: input.slotKind,
 		});
 
 		const row = {

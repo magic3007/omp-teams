@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 
-export type SlotKind = "worker" | "integrator";
+export type SlotKind = "worker" | "integrator" | "analyst";
 export type SlotStatus = "free" | "occupied" | "retiring" | "retired";
 
 export interface SlotRow {
@@ -49,15 +49,21 @@ export class Slots {
 			.all(projectId, group, kind) as SlotRow[];
 	}
 
+	analystsOf(projectId: string): SlotRow[] {
+		return this.db
+			.query("SELECT * FROM slots WHERE project_id = ? AND kind = 'analyst' ORDER BY index_no")
+			.all(projectId) as SlotRow[];
+	}
+
 	ensure(input: {
 		projectId: string | null;
-		group: string;
+		group: string | null;
 		kind: SlotKind;
 		index: number;
 		worktree: string;
 		branch: string;
 	}): SlotRow {
-		const id = slotIdFor(input.projectId, input.group, input.index, input.kind);
+		const id = slotIdFor(input.projectId, input.group ?? "", input.index, input.kind);
 		const existing = this.byId(id);
 		if (existing) {
 			this.db.run(

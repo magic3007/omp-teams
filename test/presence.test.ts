@@ -64,7 +64,7 @@ describe("status line", () => {
 		expect(statusSegments(input({ agent: lead }))[0]).toMatchObject({ glyph: "★", text: "group leader · g" });
 		const worker = agent({ role: "worker", seat: "worker:s-1", label: labelFor("worker", { group: "g", index: 1 }) });
 		expect(statusSegments(input({ agent: worker }))[0]).toMatchObject({ glyph: "☆", text: "worker 1 · g" });
-		const integrator = agent({ role: "worker", seat: "worker:s-2", label: labelFor("worker", { group: "g", integrator: true }) });
+		const integrator = agent({ role: "worker", seat: "worker:s-2", label: labelFor("worker", { group: "g", slot: "integrator" }) });
 		expect(statusSegments(input({ agent: integrator, integrator: true }))[0]).toMatchObject({ glyph: "☆", text: "integrator · g" });
 	});
 

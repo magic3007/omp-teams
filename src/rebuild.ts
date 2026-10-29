@@ -2,10 +2,9 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Herdr } from "./herdr";
 import { groupSeat, labelFor, projectSeat, RANK_GLYPH, ROLE_TITLE, workerSeat } from "./identity";
-import type { GroupRow } from "./registry";
 import type { TeamsRuntime } from "./runtime";
 import type { SlotRow } from "./slots";
-import { seatLaunchFiles } from "./spawn";
+import { ANALYST_TAB, launchCommand, seatLaunchFiles, workerTabLabel } from "./spawn";
 
 export interface RebuildDeps {
 	runtime: TeamsRuntime;
@@ -35,7 +34,7 @@ function tabExists(panes: PaneInfo[], tabId: string | null): boolean {
 function relaunch(deps: RebuildDeps, paneId: string, seat: string): boolean {
 	const script = seatLaunchFiles(deps.home, seat).script;
 	if (!existsSync(script)) return false;
-	const result = deps.herdr.runInPane(paneId, `sh ${JSON.stringify(script)}`);
+	const result = deps.herdr.runInPane(paneId, launchCommand(script));
 	return result.ok;
 }
 
@@ -97,10 +96,10 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 
 	const projects = runtime.registry.allProjects();
 	for (const project of projects) {
-		const workspaceId = ensureWorkspace(project.id, project.root, project.name);
-		if (!workspaceId) continue;
 		const lead = runtime.registry.holder(`project:${project.id}`);
 		if (!lead) continue;
+		const workspaceId = ensureWorkspace(project.id, project.root, project.name);
+		if (!workspaceId) continue;
 		if (paneExists(panes, lead.pane_id)) continue;
 		const tabId = ensureTab(workspaceId, project.root, `${RANK_GLYPH.project} ${ROLE_TITLE.project}`, null);
 		if (!tabId) continue;
@@ -119,10 +118,10 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 
 	const groups = runtime.registry.allGroups();
 	for (const group of groups) {
+		const lead = runtime.registry.holder(`group:${group.project_id}/${group.name}`);
+		if (!lead || paneExists(panes, lead.pane_id)) continue;
 		const workspaceId = ensureWorkspace(group.project_id, runtime.registry.projectRoot(group.project_id) ?? group.worktree, group.project_id);
 		if (!workspaceId) continue;
-		const lead = runtime.registry.holder(`group:${group.project_id}/${group.name}`);
-		if (lead && paneExists(panes, lead.pane_id)) continue;
 		const tabId = ensureTab(
 			workspaceId,
 			group.worktree,
@@ -132,8 +131,8 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 		if (!tabId) continue;
 		runtime.registry.setGroupLayout(group.project_id, group.name, { workspaceId, tabId });
 		const paneId = panes.find((pane) => pane.tab_id === tabId)?.pane_id ?? null;
-		if (!paneId || !lead) {
-			if (lead) result.missing.push(`group lead pane for ${group.name}`);
+		if (!paneId) {
+			result.missing.push(`group lead pane for ${group.name}`);
 			continue;
 		}
 		if (relaunch(deps, paneId, groupSeat(group.project_id, group.name))) {
@@ -148,23 +147,21 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 	for (const slot of slots) {
 		if (slot.status === "retired") continue;
 		if (paneExists(panes, slot.pane_id)) continue;
-		const group = slot.project_id && slot.group_name ? runtime.registry.group(slot.project_id, slot.group_name) : null;
-		if (!group) {
-			result.missing.push(`group for slot ${slot.id}`);
+		const workspaceId = slot.project_id
+			? ((slot.group_name ? runtime.registry.group(slot.project_id, slot.group_name)?.workspace_id : null) ??
+				runtime.registry.projectWorkspace(slot.project_id))
+			: null;
+		if (!workspaceId) {
+			result.missing.push(`workspace for slot ${slot.id}`);
 			continue;
 		}
-		const tabId = ensureTab(
-			group.workspace_id ?? runtime.registry.projectWorkspace(group.project_id) ?? "",
-			slot.worktree,
-			workerTabLabel(slot, group),
-			slot.tab_id,
-		);
+		const tabId = ensureTab(workspaceId, slot.worktree, slotTabLabel(slot), slot.tab_id);
 		if (!tabId) continue;
 		const paneId = ensurePane(tabId, slot.worktree, null);
 		if (!paneId) continue;
 		if (relaunch(deps, paneId, workerSeat(slot.id))) {
 			runtime.slots.bind(slot.id, { paneId, tabId });
-			result.relaunched.push(`slot ${slot.index_no} of ${group.name}`);
+			result.relaunched.push(labelFor("worker", { group: slot.group_name ?? undefined, index: slot.index_no, slot: slot.kind }));
 		} else {
 			result.missing.push(`launcher for slot ${slot.id}`);
 		}
@@ -173,10 +170,15 @@ export function rebuildMachine(deps: RebuildDeps): RebuildResult {
 	return result;
 }
 
-function workerTabLabel(slot: SlotRow, group: GroupRow): string {
-	return slot.kind === "integrator"
-		? labelFor("worker", { group: group.name, integrator: true })
-		: `${RANK_GLYPH.worker} workers · ${group.name}`;
+function slotTabLabel(slot: SlotRow): string {
+	switch (slot.kind) {
+		case "analyst":
+			return ANALYST_TAB;
+		case "integrator":
+			return labelFor("worker", { group: slot.group_name ?? undefined, slot: "integrator" });
+		case "worker":
+			return workerTabLabel(slot.group_name ?? "");
+	}
 }
 
 export function describeRebuild(result: RebuildResult): string {

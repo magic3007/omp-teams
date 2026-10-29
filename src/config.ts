@@ -176,8 +176,8 @@ export function loadConfig(projectRoot?: string, home?: string): TeamsConfig {
 	return config;
 }
 
-export const TASK_KINDS = ["merge", "test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
-export const ASSIGNABLE_KINDS = ["test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
+export const TASK_KINDS = ["merge", "analysis", "test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
+export const ASSIGNABLE_KINDS = ["analysis", "test", "docs", "review", "frontend", "refactor", "infra", "feature", "fix"] as const;
 export const TASK_DIFFICULTIES = ["trivial", "simple", "normal", "hard"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 export type TaskDifficulty = (typeof TASK_DIFFICULTIES)[number];
