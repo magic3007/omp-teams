@@ -18,18 +18,24 @@
 
 ## What it is
 
-You give one sentence to a personal leader. It builds the rest of the team itself: a repo
-leader for the repository, group leaders for independent slices of work, and workers in
-their own git worktrees. Each group delivers one branch. An integrator merges finished
-commits into the group branch with plain `git`. You wake up to branches you can review and
-a report with the merge commands.
+You give one sentence to a personal leader. It names the repository the sentence belongs
+to, starts that repository's repo leader if it has none, and forwards your words unchanged.
+The repo leader picks the group that works on that subject (or starts one), the group
+leader queues the same words for a worker, and workers do the work in their own git
+worktrees. Each group delivers one branch. An integrator merges finished commits into the
+group branch with plain `git`. You wake up to branches you can review and a report with the
+merge commands.
 
-- **Leaders never execute work.** They get read-only tools plus `teams_*`, enforced by a
-  `tool_call` guard, so a cheap manager model delegates instead of editing files.
+- **Leaders only route.** Each leader gets a short list of `teams_*` tools and nothing
+  else: no shell, no edit, no read, no search. A leader that cannot read code cannot plan
+  it either, so it picks the right subordinate and passes the request down word for word.
+  A missing subordinate is started by the call that needs it.
+- **One request, one task, one branch.** A request is forwarded untouched: one request
+  becomes one group, one worker, one branch. Parallel work comes from several requests.
 - **One branch per group, one worktree per worker.** No two sessions can write the same
   checkout. The main branch and the main checkout are never touched.
-- **Work must trace to a request.** A leader can only delegate while it holds a task from
-  its own manager; closing a task cancels what is still open below it.
+- **Work must trace to a request.** A leader can only forward the task it holds from its
+  own manager; closing a task cancels what is still open below it.
 - **Everything is in one SQLite file.** Registry, mailbox, tasks, spend, audit. herdr only
   draws panes and launches sessions.
 
@@ -69,47 +75,44 @@ Inside a herdr pane, start one omp session as the personal leader:
 /teams personal
 ```
 
-Then let it build the chain for a repository (replace the path):
+Then talk to it. The chain builds itself from the request:
 
 ```text
-/teams bootstrap --yes --repo ~/code/my-project --group main --count 2
+Add a CHANGELOG entry and a README badge to ~/code/my-project, commit, and tell me the SHA.
 ```
 
-This registers the personal leader, spawns a repo leader (waiting for it to register),
-spawns a group leader, then N worker seats plus an integrator. herdr shows:
+`teams_assign` starts the repo leader of `my-project`, `teams_forward` starts a group leader,
+and the first queued task brings a worker (with the integrator). herdr shows:
 
 ```text
-★★ repo leader            ← tab in the repository workspace
-★ group leader · main     ← tab, with the integrator split below it
-☆ workers · main          ← tab holding the worker panes
+★★ repo leader · my-project   ← tab in the repository workspace
+★ group leader · changelog    ← tab, with the integrator split below it
+☆ workers · changelog         ← tab holding the worker panes
 ```
 
-Now hand it work. Either queue a task for the group:
+`/teams bootstrap --yes --repo <path> [--group <name>] [--count N]` builds the same chain in
+one step when you want it before the first request.
+
+You can also queue work by hand in a group's pane:
 
 ```text
 /teams assign queue feature normal Add a README badge and a CHANGELOG entry, commit, report the SHA
-```
-
-or just talk to the personal leader in plain language and let it decide the shape:
-
-```text
-Add two new files on a team branch: colors.txt and shapes.txt. Use your team.
 ```
 
 Watch it with `/teams tree` (an overlay with every member and its omp session id) or read
 the status line:
 
 ```text
-★★★ personal leader │ ★★ 1 repo leader │ ★ 1 group leader │ ☆ 2 workers │ ⟳ 2 running
-★ group leader · main │ ⑂ teams/main │ ☆ 2 workers │ ⏳ 1 queued │ ↑ repo leader · my-project
-☆ worker 1 · main │ ⑂ teams-w/main/w1 │ ⟳ T-4fa686 add a README badge │ ↑ group leader · main
+★★★ personal leader │ ★★ 1 repo leader │ ★ 1 group leader │ ☆ 1 worker │ ⟳ 2 running
+★ group leader · changelog │ ⑂ teams/changelog │ ☆ 1 worker │ ⏳ 1 queued │ ↑ repo leader · my-project
+☆ worker 1 · changelog │ ⑂ teams-w/changelog/w1 │ ⟳ T-4fa686 add a README badge │ ↑ group leader · changelog
 ```
 
 When the work is in, review the branches:
 
 ```bash
 git -C ~/code/my-project branch --list 'teams/*'
-git -C ~/code/my-project log --oneline --graph teams/main
+git -C ~/code/my-project log --oneline --graph teams/changelog
 ```
 
 …and close the night with a report:
@@ -123,24 +126,33 @@ git -C ~/code/my-project log --oneline --graph teams/main
 ```mermaid
 flowchart TD
   H[You] -->|one request| P["★★★ personal leader"]
-  P -->|teams_assign| R["★★ repo leader"]
-  R -->|one task per group| GA["★ group leader · A"]
+  P -->|"teams_assign(repo): the words, unchanged"| R["★★ repo leader"]
+  R -->|"teams_forward(group)"| GA["★ group leader · A"]
   R --> GB["★ group leader · B"]
-  GA -->|queue| WA["☆ worker 1"]
-  GA --> WA2["☆ worker 2"]
+  GA -->|"teams_forward() into the queue"| WA["☆ worker 1"]
   GA --> IA["☆ integrator"]
   WA -->|commit| BRA[("teams/A")]
-  WA2 -->|commit| BRA
   IA -->|git merge --no-ff| BRA
   GB -->|commit| BRB[("teams/B")]
   BRA --> D["You merge the branches"]
   BRB --> D
 ```
 
+A leader never writes task text: `teams_assign` takes the human's words, every
+`teams_forward` copies the task it holds, and the worker receives the request as it was
+written. `kind`, `difficulty`, `paths` and `model` ride along. A missing repo leader, group
+leader or worker is started by the call that needs it, so one request is one routing call
+per level.
+
 **Members and seats.** Every member is a row in `teams.db` with a *seat*: `personal`,
 `project:<id>`, `group:<project>/<name>`, or `worker:<slot>`. A worker seat is a *slot*, not
 a session — a crash, a restart or a context rotation lands back in the same worktree, the
 same pane, and inherits open tasks.
+
+A repo or group leader started by a launcher *parks* when it sits idle: its seat becomes
+`parked`, omp exits, and the launcher keeps the pane and waits. Waking mail resumes that same
+omp session (`omp --resume`), same id and history. A session that never wrote a transcript
+starts fresh instead, because omp keeps no file for it.
 
 **Git model.**
 
@@ -195,7 +207,7 @@ Run `/teams` for the list. Every command works in the session's own pane.
 | `/teams spawn project --repo <path>` | personal | spawn a repo leader in its own herdr workspace |
 | `/teams spawn group <name>` | repo leader | spawn a group leader and its worktree |
 | `/teams spawn worker [--count N]` | group leader | spawn N workers (the integrator comes with the first) |
-| `/teams assign <to\|queue> <kind> <difficulty> <task>` | leaders | hand work down one level |
+| `/teams assign <repo\|group\|worker\|queue> <kind> <difficulty> <task>` | leaders | hand work down one level; a missing leader or worker is started |
 | `/teams queue` | group | the group's task list |
 | `/teams tree [--all] [--text] [--paths]` | members | the hierarchy below you with session ids |
 | `/teams status` / `progress [--fresh]` | members | member info / subordinate reports |
@@ -221,17 +233,19 @@ normal tools.
 
 | Tool | Purpose |
 |---|---|
-| `teams_assign({to?, task, kind, difficulty, paths?, model?, parent_task?})` | give work to a direct subordinate, or queue it (group leaders) |
+| `teams_assign({repo, task, kind, difficulty, paths?, model?})` | personal leader: route a request to its repository; starts the repo leader when needed |
+| `teams_forward({group?, task_id?})` | repo leader: pass the held task to a group (starts the group leader); group leader: pass it to the queue (starts a worker) |
 | `teams_report({status, summary, task_id?, sha?})` | progress / done / blocked / failed, one level up |
 | `teams_progress` / `teams_queue` | read-only views of subordinates and the group queue |
-| `teams_spawn({role, repo?, group?, count?})` | start a subordinate; returns once it registered |
 | `teams_retire` / `teams_pause` | let a worker go / pause a group's hand-out |
 | `teams_ask({to, question})` | a peer, your manager, or a direct subordinate |
 | `teams_merge({task_id})` | integrator only: merge a finished commit |
 | `teams_write_report` | write today's report file and notify |
 
-`kind` is one of `feature|fix|refactor|test|docs|review|frontend|infra`; `difficulty` is
-`trivial|simple|normal|hard`. Both are required because they drive routing.
+`kind`, `difficulty`, `paths` and `model` are set once, when the request enters the system,
+and travel down with every forward. `kind` is one of
+`feature|fix|refactor|test|docs|review|frontend|infra`; `difficulty` is
+`trivial|simple|normal|hard`; both drive model routing.
 
 ## Configuration
 
@@ -289,6 +303,15 @@ merge:
   verify_command: ""        # run in the group worktree after each merge
   verify_timeout_seconds: 600
 
+repos:                      # where the personal leader looks a repository name up
+  roots: ["~"]              # repositories are directories holding .git
+  depth: 4                  # levels below a root to search
+
+reclaim:
+  idle_minutes:
+    project: 30             # idle repo leader parks after this; 0 disables
+    group: 30               # idle group leader parks after this; 0 disables
+
 auto_integrator: true
 worktree_root: ~/.omp/teams/wt
 ```
@@ -298,6 +321,8 @@ worktree_root: ~/.omp/teams/wt
 | `OMP_TEAMS_HOME` | moves all state: database, worktrees, launchers, reports, exports |
 | `OMP_TEAMS_JOIN` | set by a launcher; the member registers with it at session start |
 | `OMP_TEAMS_STOP` | stop file watched by the launcher loop |
+| `OMP_TEAMS_PARK` | set by a launcher; park file the member writes its session file into (empty when there is nothing to resume) |
+| `OMP_TEAMS_WAKE` | set by a launcher; creating this wake file wakes the parked launcher |
 
 Set real prices in `guards.budget.prices` if you rely on the budget: many providers report
 `cost: 0` to omp, and omp-teams then prices the reported tokens itself. The default `*`
@@ -315,8 +340,27 @@ entry is a coarse guess, not a price list.
 `/teams resume` (no argument, from the personal or a repo leader) lifts the halt, releases
 brake pauses (a human pause stays), and rebuilds the herdr layout from the registry:
 missing workspaces, tabs and panes are recreated, and members whose process is gone are
-relaunched with their original launcher script. The personal leader's own pane is not
-rebuilt — it is your entry point.
+relaunched with their original launcher script. A parked leader whose pane is gone is
+relaunched the same way, and its launcher resumes the session it parked. The personal
+leader's own pane is not rebuilt — it is your entry point.
+
+**Idle leaders park.** A repo or group leader started by a launcher (the personal leader,
+`teams_assign`, `/teams spawn project` or `/teams bootstrap`) parks after
+`reclaim.idle_minutes.project` resp. `reclaim.idle_minutes.group` minutes in which its
+session was idle, had no pending message and received no mail; a leader that waits for its
+subordinates parks all the same. The member writes its omp session file into its park
+file, its seat is marked `parked`, and omp exits; the launcher keeps the pane, prints
+`omp-teams: parked; waiting for work`, and the pane title starts with `💤`.
+
+Any waking mail (a task, cancel, question or notice, or a done/blocked/failed report)
+wakes it: the mailbox touches the leader's wake file and the launcher runs
+`omp --resume <session file>`, so the same session and session id come back and the waiting
+mail is delivered. `teams_assign`, `/teams assign` and `teams_forward` wake a parked leader
+and wait for it, opening a new pane with the same launcher when the old pane is gone.
+Progress reports do not wake it; they arrive with the next wake. Parked members show as
+`💤 parked` in `/teams tree`, `teams_progress`, `/teams progress`, `/teams status`, the
+status line, the manager widget and the daily report. Launcher state lives in
+`$OMP_TEAMS_HOME/launch/` as `<tag>.sh`, `<tag>.stop`, `<tag>.park` and `<tag>.wake`.
 
 ## Reports and audit
 
@@ -328,7 +372,8 @@ rebuilt — it is your entry point.
 - the blocked tasks with the reason each one gave;
 - a merge list with a paste-ready command per branch and a `git merge-tree` conflict preview;
 - spend per session;
-- an `omp -r <session>` command per member for drill-down.
+- an `omp -r <session>` command per member for drill-down, parked members (`💤 parked`)
+  included.
 
 `/teams audit [--hours 24]` writes `$OMP_TEAMS_HOME/exports/audit-<time>.json` with
 projects, groups, agents, slots, tasks, messages, events, usage and brake state.
@@ -353,8 +398,17 @@ Read these before leaving the team alone overnight.
   or the budget is only roughly right.
 - **The personal leader's pane is yours.** If it dies, restart it; `/teams resume` does not
   recreate it.
-- **One branch per group.** A goal that must land on a *single* branch should be one group;
-  splitting across groups produces several branches for a human to merge.
+- **Leaders cannot look at the code.** They have `teams_*` only, by design. A request whose
+  repository you did not name exactly or by path comes back as a question to you, with the
+  close matches, not as a guess; a repo leader picks a group from the request's own words,
+  and a group name it invents becomes a new branch.
+- **One branch per group, one task at a time.** A group forwards one task and waits for its
+  report, so two requests that land in the same group run one after the other on one branch.
+  Start a second group when you want them in parallel.
+- **Only launcher-started leaders park.** A repo or group leader that a launcher started
+  parks when it is idle; a hand-registered leader (`/teams project` in your own session)
+  never parks, and neither do the personal leader or the workers. A wake costs an omp
+  start (seconds), and a leader that holds or awaits work parks all the same.
 
 ## License
 

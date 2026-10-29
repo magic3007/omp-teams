@@ -9,7 +9,9 @@ page only indexes code, tests and commands, and points at the files that define 
 |---|---|
 | storage and schema | [src/db.ts](../src/db.ts) |
 | project identity, rank labels, session tags | [src/identity.ts](../src/identity.ts) |
-| members, seats, groups, liveness | [src/registry.ts](../src/registry.ts) |
+| repository name lookup and scan | [src/repos.ts](../src/repos.ts) |
+| routing a request down one level | [src/route.ts](../src/route.ts) |
+| members, seats, groups, liveness, parking | [src/registry.ts](../src/registry.ts) |
 | mailbox and delivery policy | [src/mail.ts](../src/mail.ts) |
 | task state machine and claim | [src/queue.ts](../src/queue.ts) |
 | worker and integrator slots | [src/slots.ts](../src/slots.ts) |
@@ -18,7 +20,8 @@ page only indexes code, tests and commands, and points at the files that define 
 | tool-call guards per role | [src/policy.ts](../src/policy.ts) |
 | brakes, spend ledger, price fallback | [src/guard.ts](../src/guard.ts) |
 | assignment, reports, patrol, closing | [src/runtime.ts](../src/runtime.ts) |
-| herdr client and layout | [src/herdr.ts](../src/herdr.ts), [src/spawn.ts](../src/spawn.ts) |
+| herdr client | [src/herdr.ts](../src/herdr.ts) |
+| launcher script, its stop/park/wake files, spawning and relaunching | [src/spawn.ts](../src/spawn.ts) |
 | status line, widget, tree overlay | [src/presence.ts](../src/presence.ts), [src/tree.ts](../src/tree.ts) |
 | daily report and audit export | [src/report.ts](../src/report.ts) |
 | `/teams resume` machine recovery | [src/rebuild.ts](../src/rebuild.ts) |
@@ -36,7 +39,7 @@ page only indexes code, tests and commands, and points at the files that define 
 | `bun run test:herdr:m2` | queue, integrator, pause, restart, retire ([scripts/herdr-m2.ts](../scripts/herdr-m2.ts)) |
 | `bun run test:herdr:ui` | status line, widget, tree overlay keys ([scripts/herdr-ui.ts](../scripts/herdr-ui.ts)) |
 | `bun run test:herdr:auto` | one sentence to the personal leader, outcome checks ([scripts/herdr-auto.ts](../scripts/herdr-auto.ts)) |
-| `MODE=guards\|budget\|rebuild\|fresh\|bootstrap bun scripts/herdr-m3.ts` | brakes, halt/resume, rebuild, fresh status, bootstrap |
+| `MODE=guards\|budget\|rebuild\|fresh\|bootstrap\|park bun scripts/herdr-m3.ts` | brakes, halt/resume, rebuild, fresh status, bootstrap, park and wake |
 
 The herdr suites need a herdr pane and open their own temporary workspaces with an isolated
 state directory. `KEEP=1` keeps the tree and panes for inspection; without it everything is
