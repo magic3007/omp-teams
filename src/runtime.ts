@@ -201,18 +201,20 @@ export class TeamsRuntime {
 		}
 		const children = this.registry.childrenOf(viewer.seat);
 		if (children.length === 0) return { ok: false, error: "no direct subordinates" };
-		for (const child of children) {
-			this.mailer.send({
-				fromAgent: viewer.id,
-				fromSeat: viewer.seat,
-				toSeat: child.seat,
-				toAgent: child.id,
-				kind: "ping",
-				body: { text: "fresh status", fresh: true },
-			});
-		}
-		setState(this.options.db, key, String(now), now);
-		logEvent(this.options.db, "fresh", { asked: children.map((row) => row.seat) }, viewer.id, now);
+		this.options.db.transaction(() => {
+			for (const child of children) {
+				this.mailer.send({
+					fromAgent: viewer.id,
+					fromSeat: viewer.seat,
+					toSeat: child.seat,
+					toAgent: child.id,
+					kind: "ping",
+					body: { text: "fresh status", fresh: true },
+				});
+			}
+			setState(this.options.db, key, String(now), now);
+			logEvent(this.options.db, "fresh", { asked: children.map((row) => row.seat) }, viewer.id, now);
+		})();
 		return { ok: true, asked: children.map((row) => row.label) };
 	}
 
@@ -390,35 +392,37 @@ export class TeamsRuntime {
 			if ("error" in resolved) return { ok: false, error: resolved.error };
 			model = resolved.model;
 		}
-		if (received?.status === "blocked") this.queue.resume(received.id);
-		if (received) this.queue.touch(received.id);
+		return this.options.db.transaction((): AssignResult => {
+			if (received?.status === "blocked") this.queue.resume(received.id);
+			if (received) this.queue.touch(received.id);
 
-		const task = this.queue.create({
-			projectId: viewer.project_id,
-			group: target?.group_name ?? viewer.group_name,
-			fromAgent: viewer.id,
-			fromSeat: viewer.seat,
-			toAgent: target?.id ?? null,
-			toSeat: target?.seat ?? null,
-			slotId: target ? slotOfSeat(target.seat) : null,
-			body: request.task,
-			kind: request.kind,
-			difficulty: request.difficulty,
-			model,
-			paths: request.paths,
-			status: target ? "assigned" : "queued",
-			parentTask: received?.id ?? null,
-		});
+			const task = this.queue.create({
+				projectId: viewer.project_id,
+				group: target?.group_name ?? viewer.group_name,
+				fromAgent: viewer.id,
+				fromSeat: viewer.seat,
+				toAgent: target?.id ?? null,
+				toSeat: target?.seat ?? null,
+				slotId: target ? slotOfSeat(target.seat) : null,
+				body: request.task,
+				kind: request.kind,
+				difficulty: request.difficulty,
+				model,
+				paths: request.paths,
+				status: target ? "assigned" : "queued",
+				parentTask: received?.id ?? null,
+			});
 
-		if (target) this.sendTaskMail(task, viewer.id, viewer.seat, target.seat, target.id);
-		logEvent(
-			this.options.db,
-			target ? "assign" : "enqueue",
-			{ taskId: task.id, to: target?.id ?? null, model },
-			viewer.id,
-			this.now(),
-		);
-		return { ok: true, taskId: task.id, model, to: target, queued: !target };
+			if (target) this.sendTaskMail(task, viewer.id, viewer.seat, target.seat, target.id);
+			logEvent(
+				this.options.db,
+				target ? "assign" : "enqueue",
+				{ taskId: task.id, to: target?.id ?? null, model },
+				viewer.id,
+				this.now(),
+			);
+			return { ok: true, taskId: task.id, model, to: target, queued: !target };
+		})();
 	}
 
 	private sendTaskMail(task: TaskRow, fromAgent: string, fromSeat: string, toSeat: string, toAgent: string | null): string {
@@ -450,14 +454,16 @@ export class TeamsRuntime {
 		if (!group || group.paused === 1) return null;
 		if (this.queue.current(worker.id, worker.seat)) return null;
 
-		const task = this.queue.claim(
-			{ projectId: worker.project_id, group: worker.group_name },
-			{ agentId: worker.id, slotId: slot.id, seat: worker.seat, merge: slot.kind === "integrator" },
-		);
-		if (!task) return null;
-		this.sendTaskMail(task, task.from_agent, task.from_seat ?? worker.parent_seat ?? worker.seat, worker.seat, worker.id);
-		logEvent(this.options.db, "claim", { taskId: task.id, slot: slot.id }, worker.id, this.now());
-		return task;
+		return this.options.db.transaction((): TaskRow | null => {
+			const task = this.queue.claim(
+				{ projectId: worker.project_id, group: worker.group_name },
+				{ agentId: worker.id, slotId: slot.id, seat: worker.seat, merge: slot.kind === "integrator" },
+			);
+			if (!task) return null;
+			this.sendTaskMail(task, task.from_agent, task.from_seat ?? worker.parent_seat ?? worker.seat, worker.seat, worker.id);
+			logEvent(this.options.db, "claim", { taskId: task.id, slot: slot.id }, worker.id, this.now());
+			return task;
+		})();
 	}
 
 	taskDelivered(taskId: string, worker: AgentRow): void {
@@ -465,14 +471,16 @@ export class TeamsRuntime {
 	}
 
 	inheritOpenTasks(agent: AgentRow): TaskRow[] {
-		const inherited = this.queue.heldByPredecessor(agent.seat, agent.id);
-		for (const task of inherited) {
-			this.queue.inherit(task.id, agent.id, task.attempts);
-			const fresh = this.queue.byId(task.id);
-			if (fresh) this.sendTaskMail(fresh, fresh.from_agent, fresh.from_seat ?? agent.parent_seat ?? agent.seat, agent.seat, agent.id);
-			logEvent(this.options.db, "inherit", { taskId: task.id }, agent.id, this.now());
-		}
-		return inherited;
+		return this.options.db.transaction((): TaskRow[] => {
+			const inherited = this.queue.heldByPredecessor(agent.seat, agent.id);
+			for (const task of inherited) {
+				this.queue.inherit(task.id, agent.id, task.attempts);
+				const fresh = this.queue.byId(task.id);
+				if (fresh) this.sendTaskMail(fresh, fresh.from_agent, fresh.from_seat ?? agent.parent_seat ?? agent.seat, agent.seat, agent.id);
+				logEvent(this.options.db, "inherit", { taskId: task.id }, agent.id, this.now());
+			}
+			return inherited;
+		})();
 	}
 
 	report(viewer: AgentRow, request: ReportRequest): ReportResult {
@@ -497,41 +505,43 @@ export class TeamsRuntime {
 			}
 		}
 
-		let followUp: string | undefined;
-		let evidence: string[] = [];
-		if (request.taskId) {
-			const task = this.queue.byId(request.taskId);
-			if (!task) return { ok: false, error: `task ${request.taskId} not found.` };
-			if (task.to_agent !== viewer.id && task.to_seat !== viewer.seat) {
-				return { ok: false, error: `task ${request.taskId} is not assigned to ${viewer.label}.` };
+		return this.options.db.transaction((): ReportResult => {
+			let followUp: string | undefined;
+			let evidence: string[] = [];
+			if (request.taskId) {
+				const task = this.queue.byId(request.taskId);
+				if (!task) return { ok: false, error: `task ${request.taskId} not found.` };
+				if (task.to_agent !== viewer.id && task.to_seat !== viewer.seat) {
+					return { ok: false, error: `task ${request.taskId} is not assigned to ${viewer.label}.` };
+				}
+				if (task.status === "cancelled") {
+					return { ok: false, error: `task ${request.taskId} was closed upstream; stop working on it and do not report on it.` };
+				}
+				if (task.status !== "done") followUp = this.applyReport(viewer, task, request);
+				if (request.status === "done" && (viewer.role === "group" || viewer.role === "project")) {
+					const work = this.queue.descendants(task.id).filter((row) => row.status !== "failed" && row.status !== "cancelled");
+					evidence = this.deliveredGroups(viewer, task, work).map((group) => this.groupEvidence(group));
+				}
 			}
-			if (task.status === "cancelled") {
-				return { ok: false, error: `task ${request.taskId} was closed upstream; stop working on it and do not report on it.` };
-			}
-			if (task.status !== "done") followUp = this.applyReport(viewer, task, request);
-			if (request.status === "done" && (viewer.role === "group" || viewer.role === "project")) {
-				const work = this.queue.descendants(task.id).filter((row) => row.status !== "failed" && row.status !== "cancelled");
-				evidence = this.deliveredGroups(viewer, task, work).map((group) => this.groupEvidence(group));
-			}
-		}
 
-		const summary = [
-			request.summary,
-			evidence.length > 0 ? `Delivered (checked by the system):\n${evidence.join("\n")}` : null,
-			followUp ?? null,
-		]
-			.filter((part): part is string => Boolean(part))
-			.join("\n\n");
-		const msgId = this.mailer.send({
-			fromAgent: viewer.id,
-			fromSeat: viewer.seat,
-			toSeat: parent.seat,
-			toAgent: parent.id,
-			kind: "report",
-			taskId: request.taskId ?? null,
-			body: { status: request.status, summary, task_id: request.taskId, sha: request.sha },
-		});
-		return { ok: true, msgId, to: parent, followUp };
+			const summary = [
+				request.summary,
+				evidence.length > 0 ? `Delivered (checked by the system):\n${evidence.join("\n")}` : null,
+				followUp ?? null,
+			]
+				.filter((part): part is string => Boolean(part))
+				.join("\n\n");
+			const msgId = this.mailer.send({
+				fromAgent: viewer.id,
+				fromSeat: viewer.seat,
+				toSeat: parent.seat,
+				toAgent: parent.id,
+				kind: "report",
+				taskId: request.taskId ?? null,
+				body: { status: request.status, summary, task_id: request.taskId, sha: request.sha },
+			});
+			return { ok: true, msgId, to: parent, followUp };
+		})();
 	}
 
 	private applyReport(viewer: AgentRow, task: TaskRow, request: ReportRequest): string | undefined {
@@ -640,6 +650,7 @@ export class TeamsRuntime {
 		const group = this.groupOf(integrator);
 		if (!group) return { ok: false, error: "the integrator is not bound to a group." };
 		if (!task.source_sha) return { ok: false, error: `${taskId} has no source commit.` };
+		const sourceShort = task.source_sha.slice(0, 12);
 
 		const config = this.configOf(integrator);
 		const sourceSlot = task.source_slot ? this.slots.byId(task.source_slot) : null;
@@ -648,9 +659,11 @@ export class TeamsRuntime {
 		const actualHead = branchHead(group.worktree);
 		if (group.head_sha && actualHead && actualHead !== group.head_sha) {
 			const summary = `${group.branch} moved outside the integrator (expected ${group.head_sha.slice(0, 12)}, found ${actualHead.slice(0, 12)}). Merges are on hold until a human checks the branch and runs /teams accept-head ${group.name}.`;
-			this.queue.block(task.id);
-			this.report(integrator, { status: "blocked", summary });
-			logEvent(this.options.db, "merge:head-mismatch", { expected: group.head_sha, actual: actualHead }, integrator.id, this.now());
+			this.options.db.transaction(() => {
+				this.queue.block(task.id);
+				this.report(integrator, { status: "blocked", summary });
+				logEvent(this.options.db, "merge:head-mismatch", { expected: group.head_sha, actual: actualHead }, integrator.id, this.now());
+			})();
 			return { ok: true, summary };
 		}
 
@@ -661,67 +674,69 @@ export class TeamsRuntime {
 			{ verifyCommand: config.merge.verify_command, verifyTimeoutMs: config.merge.verify_timeout_seconds * 1000 },
 		);
 
-		let summary: string;
-		let status: ReportRequest["status"];
-		switch (result.kind) {
-			case "merged":
-			case "already-merged": {
-				this.queue.done(task.id, result.sha);
-				if (integrator.project_id && integrator.group_name) {
-					this.registry.setGroupHead(integrator.project_id, integrator.group_name, result.sha);
+		return this.options.db.transaction((): MergeOutcome => {
+			let summary: string;
+			let status: ReportRequest["status"];
+			switch (result.kind) {
+				case "merged":
+				case "already-merged": {
+					this.queue.done(task.id, result.sha);
+					if (integrator.project_id && integrator.group_name) {
+						this.registry.setGroupHead(integrator.project_id, integrator.group_name, result.sha);
+					}
+					this.slots.incrementDone(slot.id);
+					status = "done";
+					summary = `${sourceShort} from ${sourceLabel} is in ${group.branch} at ${result.sha.slice(0, 12)}${
+						result.kind === "merged" && result.verified ? " (verified)" : ""
+					}.`;
+					break;
 				}
-				this.slots.incrementDone(slot.id);
-				status = "done";
-				summary = `${task.source_sha.slice(0, 12)} from ${sourceLabel} is in ${group.branch} at ${result.sha.slice(0, 12)}${
-					result.kind === "merged" && result.verified ? " (verified)" : ""
-				}.`;
-				break;
-			}
-			case "conflict":
-			case "verify-failed": {
-				this.queue.failTerminal(task.id);
-				const detail =
-					result.kind === "conflict"
-						? `Merging it into ${group.branch} conflicts in: ${result.files.join(", ")}.`
-						: `After merging it into ${group.branch}, verification failed:\n${result.output}`;
-				const followUp = this.queue.create({
-					projectId: task.project_id,
-					group: task.group_name,
-					fromAgent: task.from_agent,
-					fromSeat: task.from_seat ?? integrator.parent_seat ?? integrator.seat,
-					body: [
-						`Rework your commit ${task.source_sha.slice(0, 12)} (task ${task.parent_task ?? "-"}) so it merges cleanly.`,
-						detail,
-						`Rebase your branch onto ${group.branch} (\`git rebase ${group.branch}\`), resolve the problem, run the tests, commit, then report done with the new SHA.`,
-					].join("\n\n"),
-					kind: "fix",
-					difficulty: "normal",
-					model: (() => {
-						const resolved = resolveModel(config, { kind: "fix", difficulty: "normal" });
-						return "error" in resolved ? null : resolved.model;
-					})(),
-					status: "queued",
-					parentTask: task.parent_task,
-					pinSlot: task.source_slot,
-				});
-				if (integrator.project_id && integrator.group_name) {
-					this.registry.setGroupHead(integrator.project_id, integrator.group_name, actualHead);
+				case "conflict":
+				case "verify-failed": {
+					this.queue.failTerminal(task.id);
+					const detail =
+						result.kind === "conflict"
+							? `Merging it into ${group.branch} conflicts in: ${result.files.join(", ")}.`
+							: `After merging it into ${group.branch}, verification failed:\n${result.output}`;
+					const followUp = this.queue.create({
+						projectId: task.project_id,
+						group: task.group_name,
+						fromAgent: task.from_agent,
+						fromSeat: task.from_seat ?? integrator.parent_seat ?? integrator.seat,
+						body: [
+							`Rework your commit ${sourceShort} (task ${task.parent_task ?? "-"}) so it merges cleanly.`,
+							detail,
+							`Rebase your branch onto ${group.branch} (\`git rebase ${group.branch}\`), resolve the problem, run the tests, commit, then report done with the new SHA.`,
+						].join("\n\n"),
+						kind: "fix",
+						difficulty: "normal",
+						model: (() => {
+							const resolved = resolveModel(config, { kind: "fix", difficulty: "normal" });
+							return "error" in resolved ? null : resolved.model;
+						})(),
+						status: "queued",
+						parentTask: task.parent_task,
+						pinSlot: task.source_slot,
+					});
+					if (integrator.project_id && integrator.group_name) {
+						this.registry.setGroupHead(integrator.project_id, integrator.group_name, actualHead);
+					}
+					status = "progress";
+					summary = `${result.kind === "conflict" ? "conflict" : "verification failure"} merging ${sourceShort} from ${sourceLabel}; sent back as ${followUp.id}.`;
+					break;
 				}
-				status = "progress";
-				summary = `${result.kind === "conflict" ? "conflict" : "verification failure"} merging ${task.source_sha.slice(0, 12)} from ${sourceLabel}; sent back as ${followUp.id}.`;
-				break;
+				case "error":
+					this.queue.block(task.id);
+					status = "blocked";
+					summary = `merge ${task.id} failed: ${result.error}`;
+					break;
 			}
-			case "error":
-				this.queue.block(task.id);
-				status = "blocked";
-				summary = `merge ${task.id} failed: ${result.error}`;
-				break;
-		}
 
-		const reported = this.report(integrator, { summary, status, taskId: undefined });
-		logEvent(this.options.db, `merge:${result.kind}`, { taskId: task.id, sha: task.source_sha }, integrator.id, this.now());
-		if (!reported.ok) return { ok: true, summary: `${summary} (report not delivered: ${reported.error})` };
-		return { ok: true, summary };
+			const reported = this.report(integrator, { summary, status, taskId: undefined });
+			logEvent(this.options.db, `merge:${result.kind}`, { taskId: task.id, sha: task.source_sha }, integrator.id, this.now());
+			if (!reported.ok) return { ok: true, summary: `${summary} (report not delivered: ${reported.error})` };
+			return { ok: true, summary };
+		})();
 	}
 
 	ask(viewer: AgentRow, to: string, question: string): { ok: true; msgId: string } | { ok: false; error: string } {
@@ -832,9 +847,11 @@ export class TeamsRuntime {
 				if (owner?.status !== "alive") {
 					const holder = task.to_seat ? this.registry.bySeat(task.to_seat) : null;
 					if (holder && holder.id !== task.to_agent) {
-						this.queue.inherit(task.id, holder.id, task.attempts + 1);
-						const fresh = this.queue.byId(task.id);
-						if (fresh) this.sendTaskMail(fresh, manager.id, manager.seat, holder.seat, holder.id);
+						this.options.db.transaction(() => {
+							this.queue.inherit(task.id, holder.id, task.attempts + 1);
+							const fresh = this.queue.byId(task.id);
+							if (fresh) this.sendTaskMail(fresh, manager.id, manager.seat, holder.seat, holder.id);
+						})();
 						result.inherited.push(task.id);
 					} else if (task.status === "assigned" && task.to_seat) {
 						this.queue.reassignToSeat(task.id, task.attempts);
@@ -845,18 +862,20 @@ export class TeamsRuntime {
 					continue;
 				}
 				if (task.status === "running" && !task.escalated_at && now - task.updated_at > config.stall_minutes * 60_000) {
-					this.mailer.send({
-						fromAgent: manager.id,
-						fromSeat: manager.seat,
-						toSeat: manager.seat,
-						toAgent: manager.id,
-						kind: "notice",
-						taskId: task.id,
-						body: {
-							text: `Task ${task.id} (${task.title}) has run for ${Math.round((now - task.updated_at) / 60_000)} minutes without a report from ${owner?.label ?? task.to_agent}. Ask with teams_ask, or decide whether to re-scope it.`,
-						},
-					});
-					this.queue.markEscalated(task.id);
+					this.options.db.transaction(() => {
+						this.mailer.send({
+							fromAgent: manager.id,
+							fromSeat: manager.seat,
+							toSeat: manager.seat,
+							toAgent: manager.id,
+							kind: "notice",
+							taskId: task.id,
+							body: {
+								text: `Task ${task.id} (${task.title}) has run for ${Math.round((now - task.updated_at) / 60_000)} minutes without a report from ${owner?.label ?? task.to_agent}. Ask with teams_ask, or decide whether to re-scope it.`,
+							},
+						});
+						this.queue.markEscalated(task.id);
+					})();
 					result.stalled.push(task.id);
 				}
 			}
@@ -871,13 +890,15 @@ export class TeamsRuntime {
 
 		const blocked = this.queue.issuedBy(manager.seat, ["blocked"]).filter((task) => !task.escalated_at);
 		for (const task of blocked) {
-			this.queue.markEscalated(task.id);
-			if (!manager.parent_seat) continue;
-			const reported = this.report(manager, {
-				status: "blocked",
-				summary: `${task.id} (${task.title}) is blocked after ${task.attempts} attempt(s) and needs a decision.`,
-			});
-			if (reported.ok) result.escalated.push(task.id);
+			this.options.db.transaction(() => {
+				this.queue.markEscalated(task.id);
+				if (!manager.parent_seat) return;
+				const reported = this.report(manager, {
+					status: "blocked",
+					summary: `${task.id} (${task.title}) is blocked after ${task.attempts} attempt(s) and needs a decision.`,
+				});
+				if (reported.ok) result.escalated.push(task.id);
+			})();
 		}
 
 		if (manager.role === "group" && manager.project_id && manager.group_name) {
@@ -938,9 +959,11 @@ export class TeamsRuntime {
 		const count = row?.n ?? 0;
 		if (count < limit) return false;
 		const summary = `group ${manager.group_name} produced ${count} blocked report(s) in the last hour (limit ${limit}); it is paused and needs a human. Resume it with /teams resume ${manager.group_name} once the cause is fixed.`;
-		this.registry.setGroupPaused(group.project_id, group.name, true, "blocked-rate");
-		this.report(manager, { status: "blocked", summary });
-		logEvent(this.options.db, "guard:blocked-rate", { group: group.name, count, limit }, manager.id, this.now());
+		this.options.db.transaction(() => {
+			this.registry.setGroupPaused(group.project_id, group.name, true, "blocked-rate");
+			this.report(manager, { status: "blocked", summary });
+			logEvent(this.options.db, "guard:blocked-rate", { group: group.name, count, limit }, manager.id, this.now());
+		})();
 		return true;
 	}
 

@@ -914,3 +914,50 @@ describe("brakes", () => {
 		expect(mailBodyOf(ping ?? { body: "{}" })).toMatchObject({ fresh: true });
 	});
 });
+
+describe("a task and its mail change together", () => {
+	const breakMail = () =>
+		db.run("CREATE TRIGGER mail_down BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'mail down'); END");
+	const repairMail = () => db.run("DROP TRIGGER mail_down");
+	const taskCount = () => db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM tasks").get()?.n ?? 0;
+
+	test("an assignment whose mail cannot be written leaves no task, so a retry delivers exactly one", () => {
+		const t = team();
+		const before = taskCount();
+		breakMail();
+		expect(() => runtime.assign(t.project, { to: t.group.id, task: "doc it", kind: "docs", difficulty: "simple", requireOpenTask: false })).toThrow(
+			"mail down",
+		);
+		expect(taskCount()).toBe(before);
+
+		repairMail();
+		const retry = runtime.assign(t.project, { to: t.group.id, task: "doc it", kind: "docs", difficulty: "simple", requireOpenTask: false });
+		if (!retry.ok) throw new Error(retry.error);
+		expect(taskCount()).toBe(before + 1);
+		expect(runtime.takeInbox(t.group).filter((row) => row.kind === "task").map((row) => row.task_id)).toEqual([retry.taskId]);
+	});
+
+	test("a claim whose mail cannot be written leaves the task on the queue", () => {
+		const t = team();
+		const queued = runtime.assign(t.group, { task: "add a.txt", kind: "feature", difficulty: "simple" });
+		if (!queued.ok) throw new Error(queued.error);
+		breakMail();
+		expect(() => runtime.claimNext(t.w1)).toThrow("mail down");
+		expect(runtime.taskById(queued.taskId)?.status).toBe("queued");
+
+		repairMail();
+		expect(runtime.claimNext(t.w1)?.id).toBe(queued.taskId);
+	});
+
+	test("a done report whose mail cannot be written leaves the task open", () => {
+		const t = team();
+		const queued = runtime.assign(t.group, { task: "add a.txt", kind: "feature", difficulty: "simple" });
+		if (!queued.ok) throw new Error(queued.error);
+		runtime.claimNext(t.w1);
+		runtime.taskDelivered(queued.taskId, t.w1);
+		const sha = commitFile(t.w1Worktree, "a.txt", "a\n", "add a");
+		breakMail();
+		expect(() => runtime.report(t.w1, { taskId: queued.taskId, status: "done", sha, summary: "added" })).toThrow("mail down");
+		expect(runtime.taskById(queued.taskId)?.status).toBe("running");
+	});
+});
